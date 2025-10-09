@@ -1,0 +1,106 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-10-08 11:29:02.272779",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "section_core",
+  "license_key",
+  "activation_token",
+  "status_banner",
+  "column_break_dbhb",
+  "status",
+  "last_validated",
+  "expires_at",
+  "grace_until",
+  "reason"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_core",
+   "fieldtype": "Section Break",
+   "label": "License"
+  },
+  {
+   "fieldname": "license_key",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "License Key",
+   "reqd": 1
+  },
+  {
+   "fieldname": "activation_token",
+   "fieldtype": "Data",
+   "label": "Activation Token",
+   "read_only": 1
+  },
+  {
+   "fieldname": "status_banner",
+   "fieldtype": "HTML",
+   "label": "Status Banner",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_dbhb",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "UNCONFIGURED\nACTIVE\nVALIDATED\nDEACTIVATED\nEXPIRED\nREVOKED\nGRACE_SOFT\nLOCK_HARD",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_validated",
+   "fieldtype": "Datetime",
+   "label": "Last Validated",
+   "read_only": 1
+  },
+  {
+   "fieldname": "expires_at",
+   "fieldtype": "Datetime",
+   "label": "Expires At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "grace_until",
+   "fieldtype": "Datetime",
+   "label": "Grace Until",
+   "read_only": 1
+  },
+  {
+   "fieldname": "reason",
+   "fieldtype": "Small Text",
+   "label": "Reason",
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2025-10-09 11:54:27.356778",
+ "modified_by": "Administrator",
+ "module": "BRV License App",
+ "name": "License Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

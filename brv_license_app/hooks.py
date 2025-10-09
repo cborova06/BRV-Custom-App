@@ -1,3 +1,4 @@
+# FILE: brv_license_app/hooks.py
 app_name = "brv_license_app"
 app_title = "BRV License App"
 app_publisher = "BRV Softare"
@@ -5,240 +6,44 @@ app_description = "License client"
 app_email = "info@brvsoftware.com.tr"
 app_license = "mit"
 
-# Apps
-# ------------------
+# Her istek başında lisans kısıtını uygula
+auth_hooks = ["brv_license_app.overrides.enforce_request"]
 
-# required_apps = []
+# 12 saatte bir otomatik doğrulama
+scheduler_events = {
+    "cron": {
+        "0 */12 * * *": [
+            "brv_license_app.brv_license_app.doctype.license_settings.license_settings.scheduled_auto_validate"
+        ]
+    }
+}
 
-# Each item in the list will be shown as an app in the apps page
-# add_to_apps_screen = [
-# 	{
-# 		"name": "brv_license_app",
-# 		"logo": "/assets/brv_license_app/logo.png",
-# 		"title": "BRV License App",
-# 		"route": "/brv_license_app",
-# 		"has_permission": "brv_license_app.api.permission.has_app_permission"
-# 	}
-# ]
+# Desk'e global JS enjekte et
+app_include_js = [
+    "brv_license_app/public/js/license_guard.js",
+    "brv_license_app/public/js/license_banner.js",
+]
 
-# Includes in <head>
-# ------------------
+# Oturum açılışında istemciye lisans özetini gönder
+boot_session = "brv_license_app.overrides.boot_session"
 
-# include js, css files in header of desk.html
-# app_include_css = "/assets/brv_license_app/css/brv_license_app.css"
-# app_include_js = "/assets/brv_license_app/js/brv_license_app.js"
+# İzin/allowlist — License Settings'in çalışabilmesi için gerekli standart endpointler
+license_allowlist_paths = [
+    "/login",
+    "/api/method/login",
+    "/api/method/logout",
+    "/api/method/ping",
+    "/assets/",
+    "/app/license-settings",  # License Settings sayfası
+    "/api/method/brv_license_app.api.license.healthz",
 
-# include js, css files in header of web template
-# web_include_css = "/assets/brv_license_app/css/brv_license_app.css"
-# web_include_js = "/assets/brv_license_app/js/brv_license_app.js"
+    # Form yükleme/kaydetme
+    "/api/method/frappe.desk.form.load.getdoc",
+    "/api/method/frappe.desk.form.save.savedocs",
 
-# include custom scss in every website theme (without file extension ".scss")
-# website_theme_scss = "brv_license_app/public/scss/website"
-
-# include js, css files in header of web form
-# webform_include_js = {"doctype": "public/js/doctype.js"}
-# webform_include_css = {"doctype": "public/css/doctype.css"}
-
-# include js in page
-# page_js = {"page" : "public/js/file.js"}
-
-# include js in doctype views
-# doctype_js = {"doctype" : "public/js/doctype.js"}
-# doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
-# doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
-# doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
-
-# Svg Icons
-# ------------------
-# include app icons in desk
-# app_include_icons = "brv_license_app/public/icons.svg"
-
-# Home Pages
-# ----------
-
-# application home page (will override Website Settings)
-# home_page = "login"
-
-# website user home page (by Role)
-# role_home_page = {
-# 	"Role": "home_page"
-# }
-
-# Generators
-# ----------
-
-# automatically create page for each record of this doctype
-# website_generators = ["Web Page"]
-
-# Jinja
-# ----------
-
-# add methods and filters to jinja environment
-# jinja = {
-# 	"methods": "brv_license_app.utils.jinja_methods",
-# 	"filters": "brv_license_app.utils.jinja_filters"
-# }
-
-# Installation
-# ------------
-
-# before_install = "brv_license_app.install.before_install"
-# after_install = "brv_license_app.install.after_install"
-
-# Uninstallation
-# ------------
-
-# before_uninstall = "brv_license_app.uninstall.before_uninstall"
-# after_uninstall = "brv_license_app.uninstall.after_uninstall"
-
-# Integration Setup
-# ------------------
-# To set up dependencies/integrations with other apps
-# Name of the app being installed is passed as an argument
-
-# before_app_install = "brv_license_app.utils.before_app_install"
-# after_app_install = "brv_license_app.utils.after_app_install"
-
-# Integration Cleanup
-# -------------------
-# To clean up dependencies/integrations with other apps
-# Name of the app being uninstalled is passed as an argument
-
-# before_app_uninstall = "brv_license_app.utils.before_app_uninstall"
-# after_app_uninstall = "brv_license_app.utils.after_app_uninstall"
-
-# Desk Notifications
-# ------------------
-# See frappe.core.notifications.get_notification_config
-
-# notification_config = "brv_license_app.notifications.get_notification_config"
-
-# Permissions
-# -----------
-# Permissions evaluated in scripted ways
-
-# permission_query_conditions = {
-# 	"Event": "frappe.desk.doctype.event.event.get_permission_query_conditions",
-# }
-#
-# has_permission = {
-# 	"Event": "frappe.desk.doctype.event.event.has_permission",
-# }
-
-# DocType Class
-# ---------------
-# Override standard doctype classes
-
-# override_doctype_class = {
-# 	"ToDo": "custom_app.overrides.CustomToDo"
-# }
-
-# Document Events
-# ---------------
-# Hook on document methods and events
-
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
-
-# Scheduled Tasks
-# ---------------
-
-# scheduler_events = {
-# 	"all": [
-# 		"brv_license_app.tasks.all"
-# 	],
-# 	"daily": [
-# 		"brv_license_app.tasks.daily"
-# 	],
-# 	"hourly": [
-# 		"brv_license_app.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"brv_license_app.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"brv_license_app.tasks.monthly"
-# 	],
-# }
-
-# Testing
-# -------
-
-# before_tests = "brv_license_app.install.before_tests"
-
-# Overriding Methods
-# ------------------------------
-#
-# override_whitelisted_methods = {
-# 	"frappe.desk.doctype.event.event.get_events": "brv_license_app.event.get_events"
-# }
-#
-# each overriding function accepts a `data` argument;
-# generated from the base implementation of the doctype dashboard,
-# along with any modifications made in other Frappe apps
-# override_doctype_dashboards = {
-# 	"Task": "brv_license_app.task.get_dashboard_data"
-# }
-
-# exempt linked doctypes from being automatically cancelled
-#
-# auto_cancel_exempted_doctypes = ["Auto Repeat"]
-
-# Ignore links to specified DocTypes when deleting documents
-# -----------------------------------------------------------
-
-# ignore_links_on_delete = ["Communication", "ToDo"]
-
-# Request Events
-# ----------------
-# before_request = ["brv_license_app.utils.before_request"]
-# after_request = ["brv_license_app.utils.after_request"]
-
-# Job Events
-# ----------
-# before_job = ["brv_license_app.utils.before_job"]
-# after_job = ["brv_license_app.utils.after_job"]
-
-# User Data Protection
-# --------------------
-
-# user_data_fields = [
-# 	{
-# 		"doctype": "{doctype_1}",
-# 		"filter_by": "{filter_by}",
-# 		"redact_fields": ["{field_1}", "{field_2}"],
-# 		"partial": 1,
-# 	},
-# 	{
-# 		"doctype": "{doctype_2}",
-# 		"filter_by": "{filter_by}",
-# 		"partial": 1,
-# 	},
-# 	{
-# 		"doctype": "{doctype_3}",
-# 		"strict": False,
-# 	},
-# 	{
-# 		"doctype": "{doctype_4}"
-# 	}
-# ]
-
-# Authentication and authorization
-# --------------------------------
-
-# auth_hooks = [
-# 	"brv_license_app.auth.validate"
-# ]
-
-# Automatically update python controller files with type annotations for this app.
-# export_python_type_annotations = True
-
-# default_log_clearing_doctypes = {
-# 	"Logging DocType Name": 30  # days to retain logs
-# }
-
+    # Doc method çağrıları (ör. activate/validate/deactivate)
+    "/api/method/run_doc_method",
+    
+    # License Settings API'leri
+    "/api/method/brv_license_app.brv_license_app.doctype.license_settings.license_settings",
+]
