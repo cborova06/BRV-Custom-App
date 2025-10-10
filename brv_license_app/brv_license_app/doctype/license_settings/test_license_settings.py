@@ -94,6 +94,7 @@ class DummyClientTokenMismatch(DummyClient):
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 @contextlib.contextmanager
 def patched_client(klass):
     with patch(f"{MOD}.LicenseClient", new=klass):
