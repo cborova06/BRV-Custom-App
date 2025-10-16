@@ -1,277 +1,329 @@
-# Copyright (c) 2025, BRV Software
-# See license.txt
-
 from __future__ import annotations
 
 import json
-import contextlib
-from datetime import timedelta
-from unittest.mock import patch
+import types
+import unittest
+from datetime import datetime, timedelta
+from unittest.mock import patch, MagicMock
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
-from frappe.utils import now_datetime, add_to_date
 
-# Test ettiğimiz modül
-MOD = "brv_license_app.brv_license_app.doctype.license_settings.license_settings"
-
-# ---------------------------------------------------------------------------
-# Dummy LMFWC Client
-# ---------------------------------------------------------------------------
-
-class DummyClient:
-    _server = {
-        "license_key": None,
-        "token": None,
-        "activated": False,
-        "activation_limit": 3,
-        "activation_count": 0,
-        "expires_at": add_to_date(now_datetime(), days=14),
-        "revoked": False,
-    }
-
-    def __init__(self, *args, **kwargs):
-        pass
-
-    def activate(self, license_key: str, device: dict | None = None) -> dict:
-        s = self._server
-        s["license_key"] = license_key
-        s["activated"] = True
-        s["activation_count"] = 1
-        s["token"] = "TOK1"
-        return self._norm()
-
-    def reactivate(self, license_key: str, token: str, device: dict | None = None) -> dict:
-        s = self._server
-        assert s["token"] == token, "invalid token"
-        s["token"] = "TOK2"
-        s["activated"] = True
-        return self._norm()
-
-    def validate(self, license_key: str, token: str | None = None) -> dict:
-        s = self._server
-        if token and token != s["token"]:
-            from brv_license_app.license_client import LMFWCError  # type: ignore
-            raise LMFWCError("invalid token")
-        return self._norm()
-
-    def deactivate(self, license_key: str, token: str | None = None) -> dict:
-        s = self._server
-        s["activated"] = False
-        s["activation_count"] = 0
-        s["token"] = None
-        return self._norm()
-
-    def normalize(self, resp: dict) -> dict:
-        resp = dict(resp)
-        resp["raw"] = {"dummy": True}
-        return resp
-
-    def _norm(self) -> dict:
-        s = self._server
-        status = "ACTIVE" if s["activated"] else "DEACTIVATED"
-        remaining = int(s["activation_limit"]) - int(s["activation_count"])
-        return {
-            "status": status,
-            "expires_at": s["expires_at"],
-            "activation_limit": s["activation_limit"],
-            "activation_count": s["activation_count"],
-            "remaining": remaining,
-            "token": s["token"],
-            "reason": None,
-        }
+# Target module under test
+from brv_license_app.brv_license_app.doctype.license_settings import license_settings as ls
+from brv_license_app.license_client import LMFWCContractError, LMFWCRequestError
 
 
-class DummyClientTokenMismatch(DummyClient):
-    def validate(self, license_key: str, token: str | None = None) -> dict:
-        if token:
-            from brv_license_app.license_client import LMFWCError  # type: ignore
-            raise LMFWCError("invalid token")
-        return super().validate(license_key, token=None)
+# ------------------------
+# Test Utilities
+# ------------------------
+class _StubMeta:
+    def get_field(self, name):
+        # Pretend all fields exist so _set_if_exists always works
+        return True
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+class _StubDoc:
+    def __init__(self):
+        # Minimal field surface the controller touches
+        self.license_key = None
+        self.activation_token = None
+        self.status = None
+        self.reason = None
+        self.last_validated = None
+        self.expires_at = None
+        self.grace_until = None
+        self.remaining = None
+        self.last_response_raw = None
+        self.last_error_raw = None
+        self.meta = _StubMeta()
+        self._saves = 0
+
+    def set(self, key, value):
+        setattr(self, key, value)
+
+    def save(self, ignore_permissions=False):
+        # record that save() was invoked; emulate Frappe's contract
+        self._saves += 1
 
 
-@contextlib.contextmanager
-def patched_client(klass):
-    with patch(f"{MOD}.LicenseClient", new=klass):
-        yield
-
-def setup_clean_single():
-    """License Settings single'ı temiz başlangıca getir (mandatory bypass ile)."""
-    doc = frappe.get_single("License Settings")
-    for f, v in {
-        "license_key": None,
-        "activation_token": None,
-        "status": "UNCONFIGURED",
-        "activation_limit": None,
-        "activation_count": None,
-        "remaining": None,
-        "expires_at": None,
-        "grace_until": None,
-        "reason": None,
-        "last_validated": None,
-        "token_version": 0,
-        "token_last_rotated": None,
-        "token_history": [],
-        "validation_interval_hours": 12,
-        "grace_days": 7,
-        "offline_tolerance_hours": 72,
-        "installation_id": None,
-    }.items():
-        doc.set(f, v)
-    # ---- kritik satırlar: mandatory/validate bypass ----
-    doc.flags.ignore_mandatory = True
-    doc.flags.ignore_validate = True
-    doc.save(ignore_permissions=True)
-    frappe.db.commit()
-    return doc
-
-def set_conf():
-    frappe.conf.update({
-        "lmfwc_base_url": "https://dummy.local",
-        "lmfwc_ck": "ck",
-        "lmfwc_cs": "cs",
-        "lmfwc_allow_insecure_http": 1,
-        "lmfwc_timeout_seconds": 2,
-    })
+def _ts(s: str) -> datetime:
+    # Helper to make naive datetimes (Frappe runtime treats them as naive in tests)
+    return datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
 
 
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
+# Fixed clock to make assertions deterministic
+NOW = _ts("2025-10-16 10:00:00")
+
 
 class TestLicenseSettings(FrappeTestCase):
-
     def setUp(self):
-        setup_clean_single()
-        set_conf()
+        super().setUp()
+        # Patch now_datetime globally for deterministic tests
+        self.now_patcher = patch("brv_license_app.brv_license_app.doctype.license_settings.license_settings.now_datetime", return_value=NOW)
+        self.now_patcher.start()
 
-    def test_activate_sets_fields_and_token(self):
-        from brv_license_app.brv_license_app.doctype.license_settings import license_settings as ls
-        with patched_client(DummyClient):
-            doc = frappe.get_single("License Settings")
-            doc.license_key = "LIC-123"
-            doc.save(ignore_permissions=True)
+        # Silence frappe.log_error during tests
+        self.log_patcher = patch("brv_license_app.brv_license_app.doctype.license_settings.license_settings.frappe.log_error")
+        self.log_patcher.start()
 
-            res = json.loads(ls.activate_license())
-            self.assertTrue(res["ok"])
+        # Keep a stub doc handy
+        self.doc = _StubDoc()
 
-            doc = frappe.get_single("License Settings")
-            self.assertEqual(doc.status, "VALIDATED")
-            self.assertIsNotNone(doc.expires_at)
-            self.assertEqual(doc.activation_token, "TOK1")
-            self.assertEqual(doc.token_version, 1)
+        # get_single always returns our stub doc unless a test overrides
+        self.get_single_patcher = patch(
+            "brv_license_app.brv_license_app.doctype.license_settings.license_settings.frappe.get_single",
+            return_value=self.doc,
+        )
+        self.get_single_patcher.start()
 
-    def test_reactivate_rotates_token_and_history(self):
-        from brv_license_app.brv_license_app.doctype.license_settings import license_settings as ls
-        with patched_client(DummyClient):
-            doc = frappe.get_single("License Settings")
-            doc.license_key = "LIC-123"
-            doc.save(ignore_permissions=True)
-            json.loads(ls.activate_license())
+    def tearDown(self):
+        self.now_patcher.stop()
+        self.log_patcher.stop()
+        self.get_single_patcher.stop()
+        super().tearDown()
 
-            res = json.loads(ls.reactivate_license())
-            self.assertTrue(res["ok"])
+    # ------------------------
+    # activate_license
+    # ------------------------
+    def test_activate_license_happy_path_sets_active_and_updates_token(self):
+        self.doc.license_key = "LIC-123"
 
-            doc = frappe.get_single("License Settings")
-            self.assertEqual(doc.activation_token, "TOK2")
-            self.assertEqual(doc.token_version, 2)
-            self.assertTrue(len(doc.token_history) >= 1)
-            row = doc.token_history[0]
-            self.assertTrue(row.token_hash_sha256)
-            # 'TOK1' için last4 => 'TOK1'
-            self.assertEqual(row.token_suffix_last_4, "TOK1")
+        # fake client.activate -> returns canonical payload
+        payload = {
+            "success": True,
+            "data": {
+                "expiresAt": "2025-12-31 00:00:00",
+                "activationData": {"token": "tok-NEW-ACTIVE", "deactivated_at": None},
+                "timesActivated": 1,
+            },
+        }
 
-    def test_validate_tokened_then_fallback(self):
-        """Token mismatch olduğunda tokensız validate fallback çalışmalı."""
-        from brv_license_app.brv_license_app.doctype.license_settings import license_settings as ls
+        client = MagicMock()
+        client.activate.return_value = payload
+        with patch("brv_license_app.brv_license_app.doctype.license_settings.license_settings.get_client", return_value=client):
+            out = ls.activate_license()
 
-        with patched_client(DummyClient):
-            doc = frappe.get_single("License Settings")
-            doc.license_key = "LIC-123"
-            doc.save(ignore_permissions=True)
-            json.loads(ls.activate_license())
+        # Returned payload should be data level
+        self.assertEqual(out, payload["data"])
 
-        with patched_client(DummyClientTokenMismatch):
-            res = json.loads(ls.validate_license())
-            self.assertTrue(res["ok"])
-            doc = frappe.get_single("License Settings")
-            self.assertIn(doc.status, ("ACTIVE", "VALIDATED"))
+        # Doc side effects
+        self.assertEqual(self.doc.status, ls.STATUS_ACTIVE)
+        self.assertEqual(self.doc.reason, "Activated")
+        self.assertIsNotNone(self.doc.last_validated)
+        self.assertIsNone(self.doc.grace_until)
+        self.assertEqual(self.doc.activation_token, "tok-NEW-ACTIVE")
+        self.assertEqual(self.doc.expires_at, _ts("2025-12-31 00:00:00"))
+        self.assertGreaterEqual(self.doc._saves, 1)
 
-    def test_deactivate_single_archives_and_clears_token(self):
-        from brv_license_app.brv_license_app.doctype.license_settings import license_settings as ls
-        with patched_client(DummyClient):
-            doc = frappe.get_single("License Settings")
-            doc.license_key = "LIC-123"
-            doc.save(ignore_permissions=True)
-            json.loads(ls.activate_license())
-            self.assertEqual(frappe.get_single("License Settings").activation_token, "TOK1")
+    def test_activate_license_expired_error_marks_doc_and_throws(self):
+        self.doc.license_key = "LIC-EXPIRED"
 
-            res = json.loads(ls.deactivate_license(mode="single"))
-            self.assertTrue(res["ok"])
+        # Simulate server error payload with expired code and a UTC timestamp in message
+        err_payload = {
+            "success": False,
+            "data": {
+                "errors": {"lmfwc_rest_license_expired": ["expired."]},
+                "error_data": {"lmfwc_rest_license_expired": {"status": 410}},
+            },
+        }
+        msg = "License expired on 2025-10-10 00:00:00 (UTC)"
+        exc = LMFWCContractError(msg)
+        # Attach payload attribute like the client does
+        setattr(exc, "payload", err_payload)
 
-            doc = frappe.get_single("License Settings")
-            self.assertEqual(doc.status, "DEACTIVATED")
-            self.assertIsNone(doc.activation_token)
-            self.assertTrue(len(doc.token_history) >= 1)
+        client = MagicMock()
+        client.activate.side_effect = exc
 
-    def test_deactivate_bulk_also_archives_and_sets_deactivated(self):
-        from brv_license_app.brv_license_app.doctype.license_settings import license_settings as ls
-        with patched_client(DummyClient):
-            doc = frappe.get_single("License Settings")
-            doc.license_key = "LIC-123"
-            doc.save(ignore_permissions=True)
-            json.loads(ls.activate_license())
+        with patch("brv_license_app.brv_license_app.doctype.license_settings.license_settings.get_client", return_value=client):
+            with self.assertRaises(frappe.ValidationError):
+                ls.activate_license()
 
-            res = json.loads(ls.deactivate_license(mode="bulk"))
-            self.assertTrue(res["ok"])
+        # Doc should be stamped as EXPIRED and saved
+        self.assertEqual(self.doc.status, ls.STATUS_EXPIRED)
+        self.assertIsNotNone(self.doc.grace_until)
+        self.assertEqual(self.doc.expires_at, _ts("2025-10-10 00:00:00"))
+        self.assertIn("expired", (self.doc.reason or "").lower())
+        self.assertGreaterEqual(self.doc._saves, 1)
 
-            doc = frappe.get_single("License Settings")
-            self.assertEqual(doc.status, "DEACTIVATED")
-            self.assertIsNone(doc.activation_token)
+    # ------------------------
+    # validate_license
+    # ------------------------
+    def test_validate_license_short_circuits_when_already_expired(self):
+        self.doc.license_key = "LIC-X"
+        self.doc.status = ls.STATUS_EXPIRED
+        self.doc.reason = "Expired prior"
 
-    def test_healthz_ok_and_expired_grace(self):
-        from brv_license_app.brv_license_app.doctype.license_settings import license_settings as ls
-        with patched_client(DummyClient):
-            doc = frappe.get_single("License Settings")
-            doc.license_key = "LIC-123"
-            doc.save(ignore_permissions=True)
-            json.loads(ls.activate_license())
+        # If get_client.validate gets called, we fail
+        with patch("brv_license_app.brv_license_app.doctype.license_settings.license_settings.get_client") as get_client:
+            result = ls.validate_license()
+            get_client.assert_not_called()
 
-            h = json.loads(ls.healthz())
-            self.assertTrue(h["ok"])
-            self.assertIn(h["status"], ("ACTIVE", "VALIDATED"))
+        self.assertEqual(result["status"], ls.STATUS_EXPIRED)
+        self.assertEqual(result["reason"], "Expired prior")
+        self.assertIsNotNone(self.doc.last_validated)
+        self.assertGreaterEqual(self.doc._saves, 1)
 
-            doc = frappe.get_single("License Settings")
-            doc.expires_at = add_to_date(now_datetime(), days=-1)
-            doc.grace_days = 7
-            doc.grace_until = add_to_date(now_datetime(), days=6)
-            doc.status = "EXPIRED"
-            doc.save(ignore_permissions=True)
+    def test_validate_license_sets_validated_when_active_activation(self):
+        self.doc.license_key = "LIC-OK"
 
-            h2 = json.loads(ls.healthz())
-            self.assertTrue(h2["ok"])
+        payload = {
+            "success": True,
+            "data": {
+                "expiresAt": "2025-12-31 00:00:00",
+                "activationData": [{
+                    "token": "tok-123",
+                    "deactivated_at": None,
+                    "updated_at": "2025-10-15 12:00:00",
+                }],
+                "timesActivated": 2,
+            },
+        }
 
-    def test_scheduler_skip_and_run(self):
-        from brv_license_app.brv_license_app.doctype.license_settings import license_settings as ls
-        with patched_client(DummyClient):
-            doc = frappe.get_single("License Settings")
-            doc.license_key = "LIC-123"
-            doc.validation_interval_hours = 24
-            doc.save(ignore_permissions=True)
-            json.loads(ls.activate_license())
+        client = MagicMock()
+        client.validate.return_value = payload
 
-            before = frappe.get_single("License Settings").last_validated
+        with patch("brv_license_app.brv_license_app.doctype.license_settings.license_settings.get_client", return_value=client):
+            out = ls.validate_license()
+
+        self.assertEqual(out, payload["data"])
+        self.assertEqual(self.doc.status, ls.STATUS_VALIDATED)
+        self.assertEqual(self.doc.reason, "Validated")
+        self.assertEqual(self.doc.expires_at, _ts("2025-12-31 00:00:00"))
+        self.assertIsNone(self.doc.grace_until)
+        self.assertIsNotNone(self.doc.last_validated)
+
+    def test_validate_license_marks_expired_if_expires_at_in_past(self):
+        self.doc.license_key = "LIC-WILL-EXPIRE"
+
+        payload = {
+            "success": True,
+            "data": {
+                # Past expiry guarantees EXPIRED path in _apply_validation_update
+                "expiresAt": "2025-01-01 00:00:00",
+                "activationData": [],
+                "timesActivated": 0,
+            },
+        }
+
+        client = MagicMock()
+        client.validate.return_value = payload
+
+        with patch("brv_license_app.brv_license_app.doctype.license_settings.license_settings.get_client", return_value=client):
+            _ = ls.validate_license()
+
+        self.assertEqual(self.doc.status, ls.STATUS_EXPIRED)
+        self.assertIsNotNone(self.doc.grace_until)
+        self.assertEqual(self.doc.expires_at, _ts("2025-01-01 00:00:00"))
+
+    # ------------------------
+    # reactivate_license
+    # ------------------------
+    def test_reactivate_license_prefers_token_from_preflight_then_activates(self):
+        self.doc.license_key = "LIC-REACT"
+        # Preflight validate returns a newer token
+        preflight_payload = {
+            "success": True,
+            "data": {
+                "activationData": [{
+                    "token": "tok-from-preflight",
+                    "deactivated_at": None,
+                    "updated_at": "2025-10-16 09:00:00",
+                }],
+            },
+        }
+        activate_payload = {
+            "success": True,
+            "data": {
+                "expiresAt": "2026-01-01 00:00:00",
+                "activationData": {"token": "tok-from-preflight", "deactivated_at": None},
+            },
+        }
+        client = MagicMock()
+        client.validate.return_value = preflight_payload
+        client.activate.return_value = activate_payload
+
+        with patch("brv_license_app.brv_license_app.doctype.license_settings.license_settings.get_client", return_value=client):
+            out = ls.reactivate_license()
+
+        self.assertEqual(out, activate_payload["data"])
+        self.assertEqual(self.doc.activation_token, "tok-from-preflight")
+        self.assertEqual(self.doc.status, ls.STATUS_ACTIVE)
+        self.assertEqual(self.doc.expires_at, _ts("2026-01-01 00:00:00"))
+
+    # ------------------------
+    # deactivate_license
+    # ------------------------
+    def test_deactivate_license_without_token_preflights_and_hard_locks(self):
+        self.doc.license_key = "LIC-DEC"
+
+        # Preflight validate provides token used for deactivation
+        preflight_validate = {
+            "success": True,
+            "data": {
+                "activationData": {"token": "tok-pre", "deactivated_at": None}
+            },
+        }
+        # Deactivate response
+        deactivate_resp = {
+            "success": True,
+            "data": {"ok": True},
+        }
+        # Post-validate after deactivate (best-effort) — keep it simple
+        post_validate = {
+            "success": True,
+            "data": {
+                "activationData": [],
+                "timesActivated": 0,
+            },
+        }
+
+        client = MagicMock()
+        client.validate.side_effect = [preflight_validate, post_validate]
+        client.deactivate.return_value = deactivate_resp
+
+        with patch("brv_license_app.brv_license_app.doctype.license_settings.license_settings.get_client", return_value=client):
+            out = ls.deactivate_license()
+
+        self.assertEqual(out, deactivate_resp["data"])
+        self.assertEqual(self.doc.status, ls.STATUS_LOCK_HARD)
+        self.assertEqual(self.doc.reason, "License deactivated")
+        self.assertIsNotNone(self.doc.grace_until)
+        self.assertIn("last_response_raw", self.doc.__dict__)
+        self.assertFalse(self.doc.activation_token)
+
+    # ------------------------
+    # get_status_banner
+    # ------------------------
+    def test_get_status_banner_renders_expected_html(self):
+        self.doc.status = ls.STATUS_VALIDATED
+        self.doc.reason = "All good <script>alert('x')</script>"
+        self.doc.remaining = 3
+
+        html = ls.get_status_banner()
+        self.assertIn("indicator green", html)
+        self.assertIn("Status:", html)
+        self.assertIn("Remaining:", html)
+        # Ensure content got escaped
+        self.assertNotIn("<script>", html)
+
+    # ------------------------
+    # scheduled_auto_validate
+    # ------------------------
+    def test_scheduled_auto_validate_no_license_key_is_noop(self):
+        self.doc.license_key = None
+        # Should not raise
+        ls.scheduled_auto_validate()
+
+    def test_scheduled_auto_validate_calls_validate_when_key_present(self):
+        self.doc.license_key = "LIC-SCHED"
+
+        with patch("brv_license_app.brv_license_app.doctype.license_settings.license_settings.validate_license") as validate:
+            validate.return_value = {"ok": True}
+            # Should not raise
             ls.scheduled_auto_validate()
-            after = frappe.get_single("License Settings").last_validated
-            self.assertEqual(before, after)
+            validate.assert_called_once_with("LIC-SCHED")
 
-            doc = frappe.get_single("License Settings")
-            doc.last_validated = add_to_date(now_datetime(), hours=-25)
-            doc.save(ignore_permissions=True)
-            ls.scheduled_auto_validate()
-            self.assertTrue(frappe.get_single("License Settings").last_validated > doc.last_validated)
+
+if __name__ == "__main__":
+    unittest.main()

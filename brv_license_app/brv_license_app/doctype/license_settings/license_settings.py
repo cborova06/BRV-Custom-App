@@ -1,14 +1,3 @@
-# ===============================================
-# FILE: brv_license_app/brv_license_app/doctype/license_settings/license_settings.py
-# BRV License App – License Settings Controller (instrumented with centralized logger)
-# -----------------------------------------------
-# Minimal schema fields supported:
-#   license_key, activation_token, status_banner, status, last_validated,
-#   expires_at, grace_until, reason
-#
-# Logging: uses `license_logger` from utils.logging. You can tail logs via:
-#   tail -f ~/frappe-bench/logs/brv_license_app.license.log
-# ===============================================
 from __future__ import annotations
 
 from typing import Any, Dict, Optional, Tuple
@@ -90,7 +79,7 @@ def activate_license(license_key: Optional[str] = None, token: Optional[str] = N
         err_status = None
         msg = str(e) or ""
 
-        # payload içindeki canonical yapı: {"success":true,"data":{"errors":{code:[...]},"error_data":{code:{"status":..}}}}
+        # payload içindeki canonical yapı: {"success":true,"data":{"errors":{code:[...]},"error_data":{code:{"status":..}}}
         try:
             data = (getattr(e, "payload", {}) or {}).get("data") or {}
             errs = data.get("errors") or {}
@@ -110,11 +99,9 @@ def activate_license(license_key: Optional[str] = None, token: Optional[str] = N
         if expired:
             # Mesajdan UTC tarihi yakalamaya çalış (örn: "... expired on 2025-10-10 00:00:00 (UTC)")
             try:
-                import re
-                from frappe.utils import get_datetime
-                m = re.search(r"expired on\s+([0-9:-\s]+)\s*\(UTC\)", msg, re.I)
-                if m:
-                    doc.expires_at = get_datetime(m.group(1).strip())
+                dt = _parse_expiry_from_msg(msg)
+                if dt:
+                    doc.expires_at = dt
             except Exception:
                 pass
 
@@ -159,7 +146,10 @@ def activate_license(license_key: Optional[str] = None, token: Optional[str] = N
 
 @frappe.whitelist()
 def reactivate_license(token: Optional[str] = None, license_key: Optional[str] = None) -> Dict[str, Any]:
-    """Reactivate with the freshest token: preflight VALIDATE then ACTIVATE(token)."""
+    """Reactivate with the freshest token: preflight VALIDATE then ACTIVATE(token).
+    Burada, `activate_license` yerine doğrudan client.activate çağrılır ki
+    LMFWCContractError (özellikle "maximum activation") yakalanıp retry yapılabilsin.
+    """
     doc = frappe.get_single("License Settings")
     lk = (license_key or getattr(doc, "license_key", "") or "").strip()
     LOG.info(
@@ -168,18 +158,20 @@ def reactivate_license(token: Optional[str] = None, license_key: Optional[str] =
     if not lk:
         frappe.throw("License Key is required in settings or as parameter.")
 
-    # Preflight: refresh token from server
+    # Preflight: token tazele
     _preflight_refresh_token(doc, lk)
 
-    # Effective token: prefer refreshed; then user-provided
+    # Efektif token: önce preflight'tan gelen; sonra kullanıcıdan gelen
     eff_token = (getattr(doc, "activation_token", "") or "").strip() or (token or "").strip()
     LOG.info(f"reactivate_license: effective_token={mask_token(eff_token)}")
     if not eff_token:
         frappe.throw("Activation token is required (not found in settings or validation response).")
 
-    # Delegate to activate with token
+    client = get_client()
+
+    # İlk deneme
     try:
-        return activate_license(license_key=lk, token=eff_token)
+        return _activate_via_client(doc, lk, eff_token, client)
     except LMFWCContractError as e:
         msg = str(e)
         if _is_expired_error(msg):
@@ -188,13 +180,25 @@ def reactivate_license(token: Optional[str] = None, license_key: Optional[str] =
             LOG.warning(f"reactivate_license: expired → status set EXPIRED. msg={msg}")
             frappe.throw("License is expired. Please renew your license.")
         LOG.warning(f"reactivate_license: first attempt failed with: {msg}")
-        if "Activation limit" in msg or "maximum activation" in msg:
+        # Aktivasyon limitine takıldıysak: preflight + yeni token ile bir kez daha dene
+        if ("Activation limit" in msg) or ("maximum activation" in msg):
             _preflight_refresh_token(doc, lk)
             eff_token2 = (getattr(doc, "activation_token", "") or "").strip() or eff_token
-            LOG.info(f"reactivate_license: retry with token={mask_token(eff_token2)}")
-            return activate_license(license_key=lk, token=eff_token2)
-        raise
-
+            if eff_token2 and eff_token2 != eff_token:
+                LOG.info(f"reactivate_license: retry with token={mask_token(eff_token2)}")
+                try:
+                    return _activate_via_client(doc, lk, eff_token2, client)
+                except LMFWCRequestError as re:
+                    if "idempotency guard" in str(re).lower():
+                        LOG.warning("reactivate_license: idempotency guard hit on retry; advise user to retry shortly")
+                        frappe.throw("Another activation attempt is still settling. Please retry in a few seconds.")
+                    raise
+            LOG.info("reactivate_license: retry skipped (no fresh token from preflight)")
+            frappe.throw("Activation limit reached on the server and no fresh token was issued. Please deactivate an existing activation or increase the limit.")
+        # Diğer sözleşme hatalarında üst katmana aynı şekilde iletme yerine
+        # kullanıcıya genel hata sunulur
+        LOG.error(f"reactivate_license: non-retryable contract error: {e}")
+        frappe.throw("Operation failed. See Error Log for details.")
 
 @frappe.whitelist()
 def deactivate_license(token: Optional[str] = None, license_key: Optional[str] = None) -> Dict[str, Any]:
@@ -340,6 +344,21 @@ def _extract_data(resp: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(resp, dict) and "data" in resp and isinstance(resp["data"], (dict, list)):
         return resp["data"]
     return resp
+
+# İç aktivasyon yürütücüsü: reactivate_license için, LMFWCContractError'ı üst seviyeye iletir
+# ki retry/policy uygulanabilsin. activate_license ile aynı yan etkileri üretir.
+def _activate_via_client(doc: Document, lk: str, token: Optional[str], client) -> Dict[str, Any]:
+    resp = client.activate(lk, token=token)
+    LOG.info(f"activate_license: response={compact_json(resp)}")
+    _write_last_raw(doc, resp)
+    payload = _extract_data(resp)
+    _apply_activation_update(doc, payload)
+    changed = _maybe_update_token_from_payload(doc, resp)
+    LOG.info(
+        f"activate_license: token_changed={changed} current_token={mask_token(getattr(doc,'activation_token',None))}"
+    )
+    doc.save(ignore_permissions=True)
+    return payload
 
 def _preflight_refresh_token(doc: Document, lk: str) -> None:
     LOG.info(f"preflight_refresh_token: validating lk={lk!r}")
@@ -560,5 +579,3 @@ def scheduled_auto_validate() -> None:
         LOG.info(f"scheduled_auto_validate: OK resp={compact_json(result)}")
     except Exception as e:
         LOG.exception(f"scheduled_auto_validate: failed: {e}")
-
-
