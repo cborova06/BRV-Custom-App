@@ -1,10 +1,9 @@
 ### BRV Custom App
 
-License client
 
 ### Installation
 
-You can install this app using the [bench](https://github.com/frappe/bench) CLI:
+install this app using the [bench](https://github.com/frappe/bench) CLI:
 
 ```bash
 cd $PATH_TO_YOUR_BENCH
