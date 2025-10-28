@@ -20,8 +20,8 @@ scheduler_events = {
 
 # Desk'e global JS enjekte et
 app_include_js = [
-    "brv_license_app/public/js/license_guard.js",
-    "brv_license_app/public/js/license_banner.js",
+    "/assets/brv_license_app/js/license_guard.js",
+    "/assets/brv_license_app/js/license_banner.js",
 ]
 
 # Oturum açılışında istemciye lisans özetini gönder

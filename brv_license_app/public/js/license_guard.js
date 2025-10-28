@@ -2,7 +2,7 @@
 /* global frappe */
 
 (function () {
-  const BOOT = () => (frappe && frappe.boot && frappe.boot.brv_license) || null;
+  const BOOT = () => (window.frappe && frappe.boot && frappe.boot.brv_license) || null;
 
   function isoToDate(v) {
     try {
@@ -69,15 +69,35 @@
     setInterval(check, 60 * 1000);
   }
 
-  // Boot olduğunda çalıştır
-  frappe.ready(() => {
-    const snap = BOOT();
-    if (!snap) return;
+  // Boot bilgisi hazır olduğunda çalıştır (Desk'te frappe.ready olmayabilir)
+  function runWhenBootReady() {
+    const tryRun = () => {
+      const snap = BOOT();
+      if (!snap) return false;
 
-    const status = (snap.status || "").toUpperCase();
-    if (status === "EXPIRED") {
-      showExpiredBanner(snap);
-      startGraceTimer(snap);
-    }
-  });
+      const status = (snap.status || "").toUpperCase();
+      if (status === "EXPIRED") {
+        showExpiredBanner(snap);
+        startGraceTimer(snap);
+      }
+      return true;
+    };
+
+    // Eğer boot hazırsa hemen çalıştır
+    if (tryRun()) return;
+
+    // Değilse kısa aralıklarla 15 sn'ye kadar bekle
+    const start = Date.now();
+    const timer = setInterval(() => {
+      if (tryRun() || Date.now() - start > 15000) {
+        clearInterval(timer);
+      }
+    }, 300);
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", runWhenBootReady);
+  } else {
+    runWhenBootReady();
+  }
 })();
