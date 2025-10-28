@@ -14,14 +14,6 @@ frappe.ui.form.on('License Settings', {
       await call_and_refresh(frm, 'activate_license', { license_key: frm.doc.license_key });
     }, __('License'));
 
-    // --- Reactivate (with Token) ---
-    frm.add_custom_button(__('Reactivate (with Token)'), async () => {
-      if (!ensure_key(frm)) return;
-      const token = await get_token_from_user(frm.doc.activation_token);
-      if (!token) return;
-      await call_and_refresh(frm, 'reactivate_license', { license_key: frm.doc.license_key, token });
-    }, __('License'));
-
     // --- Validate ---
     frm.add_custom_button(__('Validate'), async () => {
       if (!ensure_key(frm)) return;

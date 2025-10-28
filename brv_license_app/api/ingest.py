@@ -283,7 +283,7 @@ FLOAT_FIELDS = {
     "problem_confidence",
 }
 SELECT_FIELDS: Dict[str, set[str]] = {
-    "last_sentiment": {"Positive", "Neutral", "Negative"},
+    "last_sentiment": {"Positive", "Negative", "Nautral"},  # Note: typo in DB schema
     "effort_band": {"Low", "Medium", "High"},
 }
 
@@ -293,13 +293,21 @@ _SELECT_SYNONYMS: Dict[str, Dict[str, str]] = {
     # key: fieldname, value: map of lowercase input -> canonical value
     "last_sentiment": {
         "pos": "Positive", "positive": "Positive", "+": "Positive",
-        "neu": "Neutral",  "neutral": "Neutral",  "0": "Neutral",
+        "neu": "Nautral",  "neutral": "Nautral",  "0": "Nautral",  # Maps to DB value "Nautral" (typo)
         "neg": "Negative", "negative": "Negative", "-": "Negative",
+        # Turkish synonyms
+        "pozitif": "Positive", "olumlu": "Positive",
+        "nötr": "Nautral", "notr": "Nautral", "tarafsız": "Nautral", "tarafsiz": "Nautral",
+        "negatif": "Negative", "olumsuz": "Negative",
     },
     "effort_band": {
         "l": "Low", "low": "Low", "lo": "Low",
         "m": "Medium", "med": "Medium", "medium": "Medium",
         "h": "High", "hi": "High", "high": "High",
+        # Turkish synonyms
+        "düşük": "Low", "dusuk": "Low", "az": "Low",
+        "orta": "Medium",
+        "yüksek": "High", "yuksek": "High", "çok": "High", "cok": "High",
     },
 }
 

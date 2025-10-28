@@ -325,5 +325,373 @@ class TestLicenseSettings(FrappeTestCase):
             validate.assert_called_once_with("LIC-SCHED")
 
 
+    # ------------------------
+    # Helper function tests
+    # ------------------------
+    def test_parse_expiry_from_msg_success(self):
+        msg = "License expired on 2025-10-15 12:30:45 (UTC)"
+        result = ls._parse_expiry_from_msg(msg)
+        self.assertIsNotNone(result)
+        self.assertEqual(result, _ts("2025-10-15 12:30:45"))
+
+    def test_parse_expiry_from_msg_no_match(self):
+        msg = "Some other error message"
+        result = ls._parse_expiry_from_msg(msg)
+        self.assertIsNone(result)
+
+    def test_parse_expiry_from_msg_invalid_date(self):
+        msg = "expired on INVALID-DATE (UTC)"
+        result = ls._parse_expiry_from_msg(msg)
+        self.assertIsNone(result)
+
+    def test_is_expired_error(self):
+        self.assertTrue(ls._is_expired_error("License expired on..."))
+        self.assertTrue(ls._is_expired_error("EXPIRED"))
+        self.assertFalse(ls._is_expired_error("Some other error"))
+        self.assertFalse(ls._is_expired_error(None))
+
+    def test_mark_expired(self):
+        doc = _StubDoc()
+        ls._mark_expired(doc, "Test expiration")
+        self.assertEqual(doc.status, ls.STATUS_EXPIRED)
+        self.assertEqual(doc.reason, "Test expiration")
+        self.assertEqual(doc.grace_until, NOW)
+
+    def test_set_if_exists(self):
+        doc = _StubDoc()
+        ls._set_if_exists(doc, "status", "TEST")
+        self.assertEqual(doc.status, "TEST")
+
+    def test_write_last_raw(self):
+        doc = _StubDoc()
+        resp = {"success": True, "data": {"foo": "bar"}}
+        ls._write_last_raw(doc, resp)
+        self.assertIsNotNone(doc.last_response_raw)
+        parsed = json.loads(doc.last_response_raw)
+        self.assertEqual(parsed["success"], True)
+
+    def test_extract_data_with_data_key(self):
+        resp = {"success": True, "data": {"foo": "bar"}}
+        result = ls._extract_data(resp)
+        self.assertEqual(result, {"foo": "bar"})
+
+    def test_extract_data_without_data_key(self):
+        resp = {"foo": "bar"}
+        result = ls._extract_data(resp)
+        self.assertEqual(result, {"foo": "bar"})
+
+    # ------------------------
+    # Token extraction tests
+    # ------------------------
+    def test_extract_latest_token_from_single_object(self):
+        payload = {
+            "data": {
+                "activationData": {"token": "tok-single", "deactivated_at": None}
+            }
+        }
+        result = ls._extract_latest_token(payload)
+        self.assertEqual(result, "tok-single")
+
+    def test_extract_latest_token_from_list(self):
+        payload = {
+            "data": {
+                "activationData": [
+                    {
+                        "token": "tok-old",
+                        "deactivated_at": None,
+                        "created_at": "2025-10-14 10:00:00",
+                        "updated_at": "2025-10-14 10:00:00",
+                    },
+                    {
+                        "token": "tok-newest",
+                        "deactivated_at": None,
+                        "created_at": "2025-10-16 09:00:00",
+                        "updated_at": "2025-10-16 09:00:00",
+                    },
+                ]
+            }
+        }
+        result = ls._extract_latest_token(payload)
+        self.assertEqual(result, "tok-newest")
+
+    def test_extract_latest_token_prefers_active(self):
+        payload = {
+            "data": {
+                "activationData": [
+                    {
+                        "token": "tok-deactivated",
+                        "deactivated_at": "2025-10-15 00:00:00",
+                        "created_at": "2025-10-16 10:00:00",
+                        "updated_at": "2025-10-16 10:00:00",
+                    },
+                    {
+                        "token": "tok-active",
+                        "deactivated_at": None,
+                        "created_at": "2025-10-14 10:00:00",
+                        "updated_at": "2025-10-14 10:00:00",
+                    },
+                ]
+            }
+        }
+        result = ls._extract_latest_token(payload)
+        self.assertEqual(result, "tok-active")
+
+    def test_extract_latest_token_no_data(self):
+        payload = {"data": {}}
+        result = ls._extract_latest_token(payload)
+        self.assertIsNone(result)
+
+    def test_extract_latest_token_empty_list(self):
+        payload = {"data": {"activationData": []}}
+        result = ls._extract_latest_token(payload)
+        self.assertIsNone(result)
+
+    # ------------------------
+    # Grace period tests
+    # ------------------------
+    def test_apply_grace_on_failure_no_last_validated(self):
+        doc = _StubDoc()
+        doc.last_validated = None
+        ls._apply_grace_on_failure(doc, reason="Network error")
+        self.assertEqual(doc.status, ls.STATUS_GRACE_SOFT)
+        self.assertEqual(doc.grace_until, NOW)
+        self.assertIn("Grace policy", doc.reason)
+
+    def test_apply_grace_on_failure_within_soft_window(self):
+        doc = _StubDoc()
+        # 12 hours ago (within 24h soft window)
+        doc.last_validated = NOW - timedelta(hours=12)
+        ls._apply_grace_on_failure(doc, reason="API failure")
+        self.assertEqual(doc.status, ls.STATUS_GRACE_SOFT)
+        self.assertEqual(doc.grace_until, NOW)
+
+    def test_apply_grace_on_failure_within_hard_window(self):
+        doc = _StubDoc()
+        # 36 hours ago (between soft and hard)
+        doc.last_validated = NOW - timedelta(hours=36)
+        ls._apply_grace_on_failure(doc, reason="Validation failed")
+        self.assertEqual(doc.status, ls.STATUS_GRACE_SOFT)
+        self.assertEqual(doc.grace_until, NOW)
+
+    def test_apply_grace_on_failure_past_hard_window(self):
+        doc = _StubDoc()
+        # 72 hours ago (past 48h hard window)
+        doc.last_validated = NOW - timedelta(hours=72)
+        ls._apply_grace_on_failure(doc, reason="Long outage")
+        self.assertEqual(doc.status, ls.STATUS_LOCK_HARD)
+        self.assertEqual(doc.grace_until, NOW)
+
+    def test_clear_grace(self):
+        doc = _StubDoc()
+        doc.grace_until = NOW
+        doc.status = ls.STATUS_GRACE_SOFT
+        ls._clear_grace(doc)
+        self.assertIsNone(doc.grace_until)
+        self.assertEqual(doc.status, ls.STATUS_VALIDATED)
+        self.assertEqual(doc.reason, "Grace cleared after success")
+
+    def test_clear_grace_with_lock_hard(self):
+        doc = _StubDoc()
+        doc.grace_until = NOW
+        doc.status = ls.STATUS_LOCK_HARD
+        ls._clear_grace(doc)
+        self.assertIsNone(doc.grace_until)
+        self.assertEqual(doc.status, ls.STATUS_VALIDATED)
+
+    # ------------------------
+    # Apply update tests
+    # ------------------------
+    def test_apply_activation_update(self):
+        doc = _StubDoc()
+        data = {"expiresAt": "2025-12-31 00:00:00"}
+        ls._apply_activation_update(doc, data)
+        self.assertEqual(doc.status, ls.STATUS_ACTIVE)
+        self.assertEqual(doc.reason, "Activated")
+        self.assertIsNotNone(doc.last_validated)
+        self.assertIsNone(doc.grace_until)
+        self.assertEqual(doc.expires_at, _ts("2025-12-31 00:00:00"))
+
+    def test_apply_deactivation_update(self):
+        doc = _StubDoc()
+        data = {"expiresAt": "2025-12-31 00:00:00"}
+        ls._apply_deactivation_update(doc, data)
+        self.assertEqual(doc.status, ls.STATUS_DEACTIVATED)
+        self.assertEqual(doc.reason, "Deactivated")
+        self.assertEqual(doc.expires_at, _ts("2025-12-31 00:00:00"))
+
+    def test_apply_validation_update_with_active_activation(self):
+        doc = _StubDoc()
+        data = {
+            "expiresAt": "2025-12-31 00:00:00",
+            "activationData": [{"deactivated_at": None}],
+            "timesActivated": 1,
+        }
+        ls._apply_validation_update(doc, data)
+        self.assertEqual(doc.status, ls.STATUS_VALIDATED)
+        self.assertEqual(doc.reason, "Validated")
+        self.assertIsNone(doc.grace_until)
+
+    def test_apply_validation_update_no_active_activation(self):
+        doc = _StubDoc()
+        data = {
+            "expiresAt": "2025-12-31 00:00:00",
+            "activationData": [],
+            "timesActivated": 0,
+        }
+        ls._apply_validation_update(doc, data)
+        self.assertEqual(doc.status, ls.STATUS_DEACTIVATED)
+        self.assertEqual(doc.reason, "Validated (no active activation)")
+
+    def test_apply_validation_update_keeps_expired_status(self):
+        doc = _StubDoc()
+        doc.status = ls.STATUS_EXPIRED
+        doc.reason = "Previously expired"
+        data = {
+            "expiresAt": "2025-12-31 00:00:00",
+            "activationData": [{"deactivated_at": None}],
+            "timesActivated": 1,
+        }
+        ls._apply_validation_update(doc, data)
+        self.assertEqual(doc.status, ls.STATUS_EXPIRED)
+        # Reason should be preserved or updated with expired context
+        self.assertIn("expired", doc.reason.lower())
+
+    def test_apply_validation_update_marks_expired_if_date_passed(self):
+        doc = _StubDoc()
+        # Expiry date in the past
+        data = {
+            "expiresAt": "2025-01-01 00:00:00",
+            "activationData": [{"deactivated_at": None}],
+            "timesActivated": 1,
+        }
+        ls._apply_validation_update(doc, data)
+        self.assertEqual(doc.status, ls.STATUS_EXPIRED)
+        self.assertEqual(doc.grace_until, NOW)
+
+    # ------------------------
+    # Error handling tests
+    # ------------------------
+    def test_activate_license_missing_license_key(self):
+        self.doc.license_key = None
+        with self.assertRaises(frappe.ValidationError):
+            ls.activate_license()
+
+    def test_activate_license_request_error(self):
+        self.doc.license_key = "LIC-FAIL"
+        client = MagicMock()
+        client.activate.side_effect = LMFWCRequestError("Network error", status=500)
+        
+        with patch("brv_license_app.brv_license_app.doctype.license_settings.license_settings.get_client", return_value=client):
+            with self.assertRaises(frappe.ValidationError):
+                ls.activate_license()
+
+    def test_validate_license_missing_license_key(self):
+        self.doc.license_key = None
+        with self.assertRaises(frappe.ValidationError):
+            ls.validate_license()
+
+    def test_deactivate_license_missing_token(self):
+        self.doc.license_key = "LIC-X"
+        self.doc.activation_token = None
+        with self.assertRaises(frappe.ValidationError):
+            ls.deactivate_license()
+
+    def test_reactivate_license_missing_license_key(self):
+        self.doc.license_key = None
+        with self.assertRaises(frappe.ValidationError):
+            ls.reactivate_license()
+
+    # ------------------------
+    # Preflight refresh tests
+    # ------------------------
+    def test_preflight_refresh_token_updates_token(self):
+        self.doc.license_key = "LIC-PRE"
+        self.doc.activation_token = "old-token"
+        
+        payload = {
+            "success": True,
+            "data": {
+                "activationData": {"token": "new-token", "deactivated_at": None}
+            },
+        }
+        
+        client = MagicMock()
+        client.validate.return_value = payload
+        
+        with patch("brv_license_app.brv_license_app.doctype.license_settings.license_settings.get_client", return_value=client):
+            ls._preflight_refresh_token(self.doc, "LIC-PRE")
+        
+        self.assertEqual(self.doc.activation_token, "new-token")
+
+    def test_preflight_refresh_token_handles_errors_silently(self):
+        self.doc.license_key = "LIC-FAIL"
+        
+        client = MagicMock()
+        client.validate.side_effect = Exception("Network failure")
+        
+        with patch("brv_license_app.brv_license_app.doctype.license_settings.license_settings.get_client", return_value=client):
+            # Should not raise
+            ls._preflight_refresh_token(self.doc, "LIC-FAIL")
+
+    # ------------------------
+    # Reactivate retry logic tests
+    # ------------------------
+    def test_reactivate_license_retry_on_activation_limit(self):
+        self.doc.license_key = "LIC-LIMIT"
+        self.doc.activation_token = "old-token"
+        
+        preflight1 = {
+            "success": True,
+            "data": {"activationData": {"token": "token1", "deactivated_at": None}},
+        }
+        preflight2 = {
+            "success": True,
+            "data": {"activationData": {"token": "token2-fresh", "deactivated_at": None}},
+        }
+        activate_success = {
+            "success": True,
+            "data": {"expiresAt": "2026-01-01 00:00:00"},
+        }
+        
+        client = MagicMock()
+        # Two validate calls: initial preflight + retry preflight
+        client.validate.side_effect = [preflight1, preflight2]
+        # First activate fails with limit error, second succeeds with new token
+        client.activate.side_effect = [
+            LMFWCContractError("maximum activation limit reached"),
+            activate_success,
+        ]
+        
+        with patch("brv_license_app.brv_license_app.doctype.license_settings.license_settings.get_client", return_value=client):
+            result = ls.reactivate_license()
+        
+        self.assertEqual(result, activate_success["data"])
+        # Should have called activate twice (first failed, second succeeded)
+        self.assertEqual(client.activate.call_count, 2)
+        # Should have called validate twice (initial + retry preflight)
+        self.assertEqual(client.validate.call_count, 2)
+
+    def test_reactivate_license_expired_on_first_attempt(self):
+        self.doc.license_key = "LIC-EXP"
+        
+        preflight = {
+            "success": True,
+            "data": {"activationData": {"token": "tok-pre", "deactivated_at": None}},
+        }
+        
+        expired_error = LMFWCContractError("License expired on 2025-10-01 00:00:00 (UTC)")
+        
+        client = MagicMock()
+        client.validate.return_value = preflight
+        client.activate.side_effect = expired_error
+        
+        with patch("brv_license_app.brv_license_app.doctype.license_settings.license_settings.get_client", return_value=client):
+            with self.assertRaises(frappe.ValidationError):
+                ls.reactivate_license()
+        
+        # Should be marked expired
+        self.assertEqual(self.doc.status, ls.STATUS_EXPIRED)
+
+
 if __name__ == "__main__":
     unittest.main()
