@@ -283,8 +283,8 @@ FLOAT_FIELDS = {
     "problem_confidence",
 }
 SELECT_FIELDS: Dict[str, set[str]] = {
-    "last_sentiment": {"Positive", "Negative", "Nautral"},  # Note: typo in DB schema
-    "effort_band": {"Low", "Medium", "High"},
+    "last_sentiment": {"Olumlu", "Positive", "Nötr", "Neutral", "Olumsuz", "Negative"},
+    "effort_band": {"Düşük", "Low", "Orta", "Medium", "Yüksek", "High"},
 }
 
 # --- Normalization helpers for SELECT fields --------------------------------
@@ -292,22 +292,26 @@ SELECT_FIELDS: Dict[str, set[str]] = {
 _SELECT_SYNONYMS: Dict[str, Dict[str, str]] = {
     # key: fieldname, value: map of lowercase input -> canonical value
     "last_sentiment": {
+        # English (canonical values from JSON)
         "pos": "Positive", "positive": "Positive", "+": "Positive",
-        "neu": "Nautral",  "neutral": "Nautral",  "0": "Nautral",  # Maps to DB value "Nautral" (typo)
+        "neu": "Neutral", "neutral": "Neutral", "0": "Neutral",
         "neg": "Negative", "negative": "Negative", "-": "Negative",
-        # Turkish synonyms
-        "pozitif": "Positive", "olumlu": "Positive",
-        "nötr": "Nautral", "notr": "Nautral", "tarafsız": "Nautral", "tarafsiz": "Nautral",
-        "negatif": "Negative", "olumsuz": "Negative",
+        # Turkish (canonical values from JSON)
+        "pozitif": "Olumlu", "olumlu": "Olumlu",
+        "nötr": "Nötr", "notr": "Nötr", "tarafsız": "Nötr", "tarafsiz": "Nötr",
+        "negatif": "Olumsuz", "olumsuz": "Olumsuz",
+        # Legacy typo mapping
+        "nautral": "Neutral",
     },
     "effort_band": {
+        # English (canonical values from JSON)
         "l": "Low", "low": "Low", "lo": "Low",
         "m": "Medium", "med": "Medium", "medium": "Medium",
         "h": "High", "hi": "High", "high": "High",
-        # Turkish synonyms
-        "düşük": "Low", "dusuk": "Low", "az": "Low",
-        "orta": "Medium",
-        "yüksek": "High", "yuksek": "High", "çok": "High", "cok": "High",
+        # Turkish (canonical values from JSON)
+        "düşük": "Düşük", "dusuk": "Düşük", "az": "Düşük",
+        "orta": "Orta",
+        "yüksek": "Yüksek", "yuksek": "Yüksek", "çok": "Yüksek", "cok": "Yüksek",
     },
 }
 
