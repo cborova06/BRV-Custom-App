@@ -124,4 +124,39 @@ else
     rm -f "$PY_TMP"
 fi
 
+# Generate tr.csv from tr.po for Frappe translations
+HELPDESK_LOCALE="$APPS_DIR/helpdesk/helpdesk/locale"
+HELPDESK_TRANSLATIONS="$APPS_DIR/helpdesk/helpdesk/translations"
+TR_PO="$HELPDESK_LOCALE/tr.po"
+TR_CSV="$HELPDESK_TRANSLATIONS/tr.csv"
+
+if [ -f "$TR_PO" ]; then
+    echo "Generating tr.csv from tr.po..."
+    mkdir -p "$HELPDESK_TRANSLATIONS"
+    
+    python3 << PYEOF
+import re, csv
+
+po_file = '$TR_PO'
+csv_file = '$TR_CSV'
+
+with open(po_file, 'r', encoding='utf-8') as f:
+    content = f.read()
+
+matches = re.findall(r'msgid "(.*?)"\nmsgstr "(.*?)"', content, re.DOTALL)
+count = 0
+
+with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+    w = csv.writer(f)
+    for mid, mstr in matches:
+        mid = mid.replace('"\n"', '').replace('\\\\n', '\n')
+        mstr = mstr.replace('"\n"', '').replace('\\\\n', '\n')
+        if mid and mstr and mid != mstr:
+            w.writerow([mid, mstr, ''])
+            count += 1
+
+print(f"✓ tr.csv generated with {count} translations")
+PYEOF
+fi
+
 exit 0
