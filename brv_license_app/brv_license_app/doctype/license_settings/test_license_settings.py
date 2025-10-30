@@ -467,18 +467,47 @@ class TestLicenseSettings(FrappeTestCase):
 
     def test_apply_grace_on_failure_within_hard_window(self):
         doc = _StubDoc()
-        # 36 hours ago (between soft and hard)
+        # 36 hours ago (between 24h soft and 48h hard)
         doc.last_validated = NOW - timedelta(hours=36)
         ls._apply_grace_on_failure(doc, reason="Validation failed")
+        # 36 saat sonra hala GRACE_SOFT'ta olmalı (48 saat hard limit)
         self.assertEqual(doc.status, ls.STATUS_GRACE_SOFT)
         self.assertEqual(doc.grace_until, NOW)
 
     def test_apply_grace_on_failure_past_hard_window(self):
         doc = _StubDoc()
-        # 72 hours ago (past 48h hard window)
-        doc.last_validated = NOW - timedelta(hours=72)
+        # 50 hours ago (48 saat hard window'dan sonra)
+        doc.last_validated = NOW - timedelta(hours=50)
         ls._apply_grace_on_failure(doc, reason="Long outage")
+        # 48 saat geçtiği için artık LOCK_HARD olmalı
         self.assertEqual(doc.status, ls.STATUS_LOCK_HARD)
+        self.assertEqual(doc.grace_until, NOW)
+
+    def test_apply_grace_on_failure_at_24h_boundary(self):
+        doc = _StubDoc()
+        # Tam 24 saat önce (soft window sınırında)
+        doc.last_validated = NOW - timedelta(hours=24)
+        ls._apply_grace_on_failure(doc, reason="Network issue")
+        # 24 saatte tam sınırda, hala GRACE_SOFT
+        self.assertEqual(doc.status, ls.STATUS_GRACE_SOFT)
+        self.assertEqual(doc.grace_until, NOW)
+
+    def test_apply_grace_on_failure_at_48h_boundary(self):
+        doc = _StubDoc()
+        # Tam 48 saat önce (hard window sınırında)
+        doc.last_validated = NOW - timedelta(hours=48)
+        ls._apply_grace_on_failure(doc, reason="Extended outage")
+        # 48 saatte >= kontrolü olduğu için LOCK_HARD olmalı
+        self.assertEqual(doc.status, ls.STATUS_LOCK_HARD)
+        self.assertEqual(doc.grace_until, NOW)
+
+    def test_apply_grace_on_failure_just_before_48h(self):
+        doc = _StubDoc()
+        # 47.5 saat önce (48 saatten hemen önce)
+        doc.last_validated = NOW - timedelta(hours=47, minutes=30)
+        ls._apply_grace_on_failure(doc, reason="Almost expired")
+        # Henüz 48 saat geçmediği için hala GRACE_SOFT
+        self.assertEqual(doc.status, ls.STATUS_GRACE_SOFT)
         self.assertEqual(doc.grace_until, NOW)
 
     def test_clear_grace(self):
@@ -691,6 +720,68 @@ class TestLicenseSettings(FrappeTestCase):
         
         # Should be marked expired
         self.assertEqual(self.doc.status, ls.STATUS_EXPIRED)
+
+    # ------------------------
+    # New grace period tests (48h window)
+    # ------------------------
+    def test_validate_license_network_error_applies_grace_within_48h(self):
+        """Network hatası olduğunda 48 saat içinde grace period uygulanmalı"""
+        self.doc.license_key = "LIC-NET"
+        self.doc.last_validated = NOW - timedelta(hours=30)
+        
+        client = MagicMock()
+        client.validate.side_effect = LMFWCRequestError("Connection timeout", status=0)
+        
+        with patch("brv_license_app.brv_license_app.doctype.license_settings.license_settings.get_client", return_value=client):
+            with self.assertRaises(frappe.ValidationError):
+                ls.validate_license()
+        
+        # 30 saat sonra hala grace period içinde
+        self.assertIn(self.doc.status, [ls.STATUS_GRACE_SOFT])
+        self.assertIsNotNone(self.doc.grace_until)
+
+    def test_validate_license_multiple_failures_over_48h(self):
+        """48 saatten fazla süren hatalar sonunda hard lock olmalı"""
+        self.doc.license_key = "LIC-LONG-FAIL"
+        self.doc.last_validated = NOW - timedelta(hours=49)
+        
+        client = MagicMock()
+        client.validate.side_effect = LMFWCRequestError("Server unavailable", status=503)
+        
+        with patch("brv_license_app.brv_license_app.doctype.license_settings.license_settings.get_client", return_value=client):
+            with self.assertRaises(frappe.ValidationError):
+                ls.validate_license()
+        
+        # 49 saat sonra hard lock olmalı
+        self.assertEqual(self.doc.status, ls.STATUS_LOCK_HARD)
+        self.assertIsNotNone(self.doc.grace_until)
+
+    def test_scheduled_validate_grace_period_success_clears_grace(self):
+        """Grace period'daki bir sistemde başarılı validation grace'i temizlemeli"""
+        self.doc.license_key = "LIC-RECOVER"
+        self.doc.status = ls.STATUS_GRACE_SOFT
+        self.doc.grace_until = NOW - timedelta(hours=1)
+        self.doc.last_validated = NOW - timedelta(hours=20)
+        
+        payload = {
+            "success": True,
+            "data": {
+                "expiresAt": "2025-12-31 00:00:00",
+                "activationData": [{"token": "tok-ok", "deactivated_at": None}],
+                "timesActivated": 1,
+            },
+        }
+        
+        client = MagicMock()
+        client.validate.return_value = payload
+        
+        with patch("brv_license_app.brv_license_app.doctype.license_settings.license_settings.get_client", return_value=client):
+            result = ls.validate_license()
+        
+        # Grace temizlenmeli, sistem VALIDATED'a dönmeli
+        self.assertEqual(self.doc.status, ls.STATUS_VALIDATED)
+        self.assertIsNone(self.doc.grace_until)
+        self.assertIsNotNone(self.doc.last_validated)
 
 
 if __name__ == "__main__":
