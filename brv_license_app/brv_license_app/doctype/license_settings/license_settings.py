@@ -518,15 +518,17 @@ def _apply_grace_on_failure(doc: Document, *, reason: str) -> None:
     now = now_datetime()
     last_ok = getattr(doc, "last_validated", None)
 
+    # 48 saat grace period - canlı sistemde mağduriyet olmasın
     SOFT_HOURS = 24
     HARD_HOURS = 48
 
     doc.reason = f"Grace policy engaged: {reason}"
 
     if not last_ok:
+        # İlk başarısız doğrulama: soft grace ile başla
         doc.status = STATUS_GRACE_SOFT
         doc.grace_until = now
-        LOG.warning("apply_grace_on_failure: no last_validated → GRACE_SOFT")
+        LOG.warning("apply_grace_on_failure: no last_validated → GRACE_SOFT (48h grace period starts)")
         return
 
     try:

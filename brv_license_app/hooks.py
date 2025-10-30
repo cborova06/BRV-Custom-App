@@ -6,13 +6,13 @@ app_description = "License client"
 app_email = "info@brvsoftware.com.tr"
 app_license = "mit"
 
-# Her istek başında lisans kısıtını uygula
+# Her istek başında lisans kısıtını uygla
 auth_hooks = ["brv_license_app.overrides.enforce_request"]
 
-# 12 saatte bir otomatik doğrulama
+# 6 saatte bir otomatik doğrulama - 48 saat grace period içinde 8 deneme şansı
 scheduler_events = {
     "cron": {
-        "0 */12 * * *": [
+        "0 */6 * * *": [
             "brv_license_app.brv_license_app.doctype.license_settings.license_settings.scheduled_auto_validate"
         ]
     }

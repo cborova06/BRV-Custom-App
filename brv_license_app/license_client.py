@@ -201,10 +201,10 @@ class LMFWCClient:
     consumer_key: str | None = None
     consumer_secret: str | None = None
     verify_tls: bool | None = None
-    timeout_seconds: int = 15
+    timeout_seconds: int = 30  # 30 saniye timeout - network sorunlarında daha fazla şans
     user_agent: str = "BRVLicenseApp/1.0 (+helpdeskai.com)"
-    retry_count: int = 2  # only for transient errors (5xx, timeouts)
-    retry_backoff_seconds: float = 0.6
+    retry_count: int = 3  # 4 deneme (ilk + 3 retry) - canlı sistemde mağduriyet olmasın
+    retry_backoff_seconds: float = 2.0  # 2, 4, 8 saniye exponential backoff
 
     def __post_init__(self) -> None:
         if not self.base_url or not self.consumer_key or not self.consumer_secret or self.verify_tls is None:
