@@ -163,7 +163,12 @@ def process_js_code(js_text: str, keys: Iterable[str]) -> str:
 	return s
 
 
-def process_vue_file(text: str, attr_keys: Iterable[str], js_keys: Iterable[str]) -> str:
+def process_vue_file(
+	text: str,
+	attr_keys: Iterable[str],
+	js_keys: Iterable[str],
+	wrap_tags: Optional[Iterable[str]] = None
+) -> str:
 	out = process_template(text, attr_keys)
 
 	def s_repl(m: re.Match) -> str:
@@ -172,6 +177,11 @@ def process_vue_file(text: str, attr_keys: Iterable[str], js_keys: Iterable[str]
 
 	out = SCRIPT_BLOCK_RE.sub(s_repl, out)
 	out = process_all_tags(out, attr_keys)
+	
+	# Optional: wrap tag content (e.g., Button inner text)
+	if wrap_tags:
+		out = wrap_tag_content(out, wrap_tags)
+	
 	out = fix_v_model_accidents(out)
 	return out
 
@@ -286,6 +296,89 @@ def fix_v_model_accidents(text: str) -> str:
 	return text
 
 
+# ── Tag content wrapping (opt-in for Button/etc inner text) ───────────────────
+
+def wrap_tag_content(text: str, tag_names: Iterable[str]) -> str:
+	"""Wrap simple text content inside specified tags with {{ __("text") }}.
+	
+	This wraps plain text between opening and closing tags like:
+	  <Button>Send Invites</Button> -> <Button>{{ __("Send Invites") }}</Button>
+	
+	Safety guards:
+	- Skip if already wrapped (contains {{ or __)
+	- Skip if contains nested tags (< inside content)
+	- Skip if tag has :label or label attribute (redundant)
+	- Skip whitespace-only content
+	- Trim leading/trailing whitespace from wrapped text
+	
+	Args:
+		text: Vue template or component source
+		tag_names: List of tag names to process (case-sensitive, e.g., ["Button"])
+	
+	Returns:
+		Processed text with wrapped tag content
+	"""
+	if not tag_names:
+		return text
+	
+	for tag_name in tag_names:
+		# Pattern: <TagName ...> content </TagName>
+		# Captures: opening tag, content, closing tag
+		# Uses non-greedy match and excludes self-closing tags
+		pattern = re.compile(
+			rf"(<{re.escape(tag_name)}(?:\s[^>]*)?>)"  # opening tag
+			rf"(.*?)"  # content (non-greedy)
+			rf"(</{re.escape(tag_name)}>)",  # closing tag
+			re.S  # DOTALL for multiline
+		)
+		
+		def _replacer(m: re.Match) -> str:
+			opening, content, closing = m.group(1), m.group(2), m.group(3)
+			
+			# Skip if opening tag has :label or label attribute
+			if re.search(r'(?::|^|\s)label\s*=', opening):
+				return m.group(0)
+			
+			# Skip if content already has interpolation or wrapping
+			if re.search(r'{{|}|__\s*\(', content):
+				return m.group(0)
+			
+			# Skip if content has nested tags
+			if '<' in content:
+				return m.group(0)
+			
+			# Extract and trim text
+			trimmed = content.strip()
+			
+			# Skip if empty or whitespace-only
+			if not trimmed:
+				return m.group(0)
+			
+			# Skip if contains newlines after trim (complex multi-line)
+			if '\n' in trimmed or '\r' in trimmed:
+				# Allow simple case: tag spans lines but text is single-line
+				# E.g., <Button\n  >Text\n</Button>
+				# Already handled by trim, so this is a secondary guard
+				pass
+			
+			# Escape quotes in text for JS string literal
+			safe_text = trimmed.replace('\\', '\\\\').replace('"', '\\"')
+			
+			# Preserve original whitespace structure around content
+			# Detect leading/trailing whitespace in original content
+			leading_ws = content[:len(content) - len(content.lstrip())]
+			trailing_ws = content[len(content.rstrip()):]
+			
+			# Wrap with interpolation
+			wrapped = f'{{{{ __("{safe_text}") }}}}'
+			
+			return f"{opening}{leading_ws}{wrapped}{trailing_ws}{closing}"
+		
+		text = pattern.sub(_replacer, text)
+	
+	return text
+
+
 # ── Filesystem ops (atomic, reporting, ignore) ────────────────────────────────
 @dataclasses.dataclass
 class ProcessStats:
@@ -375,6 +468,7 @@ def process_file(
 	emit_diff: bool = False,
 	max_file_size: Optional[int] = None,
 	normalize: bool = False,
+	wrap_tags: Optional[Iterable[str]] = None,
 ) -> Tuple[int, Optional[str]]:
 	# Safety checks: skip symlinks and very large files (configurable)
 	try:
@@ -419,7 +513,7 @@ def process_file(
 	new_text = text
 
 	if p.suffix == ".vue":
-		new_text = process_vue_file(text, attr_keys, js_keys)
+		new_text = process_vue_file(text, attr_keys, js_keys, wrap_tags=wrap_tags)
 	elif p.suffix in (".ts", ".js"):
 		new_text = process_js_code(text, js_keys)
 	elif enable_python and p.suffix == ".py":
@@ -501,6 +595,10 @@ def run(args: argparse.Namespace) -> int:
 	changed = 0
 	diffs: List[str] = []
 
+	wrap_tags = None
+	if hasattr(args, 'wrap_tag_content') and args.wrap_tag_content:
+		wrap_tags = tuple([t.strip() for t in args.wrap_tag_content.split(",") if t.strip()])
+
 	def _work(p: pathlib.Path):
 		try:
 			if is_ignored(base, p, ignore_globs):
@@ -516,6 +614,7 @@ def run(args: argparse.Namespace) -> int:
 				emit_diff=args.diff,
 				max_file_size=getattr(args, 'max_file_size', None),
 				normalize=getattr(args, 'normalize', False),
+				wrap_tags=wrap_tags,
 			)
 		except Exception as e:
 			# Log and continue other files — robust against single-file failures
@@ -554,6 +653,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	ap.add_argument("--py-keys", default="label", help="Python dict keys to wrap (comma-separated)")
 	ap.add_argument("--py-func", default="_", help="Python i18n function name (default: _)")
 	ap.add_argument("--no-import-inject", action="store_true", help="Do not auto-inject `from frappe import _` when needed")
+
+	# Tag content wrapping (opt-in for Button/etc)
+	ap.add_argument("--wrap-tag-content", metavar="TAGS", help="Wrap inner text of specified tags with {{ __(\"text\") }} (comma-separated, e.g., Button,CustomButton)")
 
 	return ap
 

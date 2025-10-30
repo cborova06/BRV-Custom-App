@@ -461,6 +461,111 @@ class TestAtomicWrite(unittest.TestCase):
             self.assertEqual(new_mode, original_mode)
 
 
+class TestButtonTextWrapping(unittest.TestCase):
+    """Test wrapping text content inside Button and similar tags."""
+    
+    def test_simple_button_text(self):
+        """Test wrapping simple Button inner text."""
+        html = '<Button>Send Invites</Button>'
+        # Import will be added later
+        from vue_i18n_wrap import wrap_tag_content
+        result = wrap_tag_content(html, ["Button"])
+        self.assertIn('{{ __("Send Invites") }}', result)
+    
+    def test_button_with_spaces(self):
+        """Test Button text with leading/trailing spaces."""
+        html = '<Button> Clear All </Button>'
+        from vue_i18n_wrap import wrap_tag_content
+        result = wrap_tag_content(html, ["Button"])
+        self.assertIn('{{ __("Clear All") }}', result)
+    
+    def test_multiline_button_text(self):
+        """Test multi-line Button text."""
+        html = '''<Button
+          >Send Invites
+        </Button>'''
+        from vue_i18n_wrap import wrap_tag_content
+        result = wrap_tag_content(html, ["Button"])
+        self.assertIn('{{ __("Send Invites") }}', result)
+    
+    def test_already_wrapped_button_skipped(self):
+        """Test that already wrapped Button text is not double-wrapped."""
+        html = '<Button>{{ __("Already Wrapped") }}</Button>'
+        from vue_i18n_wrap import wrap_tag_content
+        result = wrap_tag_content(html, ["Button"])
+        self.assertEqual(result.count("__("), 1)
+    
+    def test_button_with_icon_only(self):
+        """Test Button with icon attribute only (no text)."""
+        html = '<Button icon="x" />'
+        from vue_i18n_wrap import wrap_tag_content
+        result = wrap_tag_content(html, ["Button"])
+        # Should not change
+        self.assertEqual(result, html)
+    
+    def test_button_with_interpolation_skipped(self):
+        """Test Button with existing interpolation."""
+        html = '<Button>{{ count }}</Button>'
+        from vue_i18n_wrap import wrap_tag_content
+        result = wrap_tag_content(html, ["Button"])
+        # Should not wrap existing interpolation
+        self.assertNotIn('__("{{ count }}")', result)
+    
+    def test_button_with_nested_elements_skipped(self):
+        """Test Button with nested elements (e.g., icons)."""
+        html = '<Button><Icon name="x" /> Close</Button>'
+        from vue_i18n_wrap import wrap_tag_content
+        result = wrap_tag_content(html, ["Button"])
+        # Should skip complex nested content
+        self.assertNotIn('__("<Icon', result)
+    
+    def test_button_with_label_prop(self):
+        """Test Button using :label prop (should not wrap content)."""
+        html = '<Button :label="__("Label")">Extra</Button>'
+        from vue_i18n_wrap import wrap_tag_content
+        result = wrap_tag_content(html, ["Button"])
+        # Should not wrap content when label prop exists
+        self.assertNotIn('__("Extra")', result)
+    
+    def test_multiple_buttons(self):
+        """Test multiple Buttons in template."""
+        html = '''
+        <div>
+          <Button>Save</Button>
+          <Button>Cancel</Button>
+          <Button>{{ __("Already") }}</Button>
+        </div>
+        '''
+        from vue_i18n_wrap import wrap_tag_content
+        result = wrap_tag_content(html, ["Button"])
+        self.assertIn('{{ __("Save") }}', result)
+        self.assertIn('{{ __("Cancel") }}', result)
+        self.assertEqual(result.count('__("Already")'), 1)
+    
+    def test_button_case_insensitive(self):
+        """Test Button tag name case insensitivity."""
+        html = '<button>Click Me</button>'
+        from vue_i18n_wrap import wrap_tag_content
+        result = wrap_tag_content(html, ["Button"])
+        # Should not wrap lowercase HTML button
+        self.assertNotIn('__("Click Me")', result)
+    
+    def test_custom_component_list(self):
+        """Test wrapping custom component list."""
+        html = '<CustomButton>Action</CustomButton>'
+        from vue_i18n_wrap import wrap_tag_content
+        result = wrap_tag_content(html, ["CustomButton"])
+        self.assertIn('{{ __("Action") }}', result)
+    
+    def test_whitespace_only_skipped(self):
+        """Test Button with only whitespace."""
+        html = '<Button>   \n  </Button>'
+        from vue_i18n_wrap import wrap_tag_content
+        result = wrap_tag_content(html, ["Button"])
+        # Should not wrap whitespace-only
+        self.assertNotIn('__("', result)
+
+
 class TestEdgeCases(unittest.TestCase):
     """Test edge cases and special scenarios."""
     
