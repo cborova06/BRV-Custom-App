@@ -163,11 +163,91 @@ def process_js_code(js_text: str, keys: Iterable[str]) -> str:
 	return s
 
 
+def _inject_vue_import(text: str) -> str:
+	"""Inject `import { __ } from "@/translation";` if __ is used but import is missing.
+	
+	Inserts after existing imports in <script> block, or at the start of script if no imports exist.
+	
+	Safety measures:
+	- Only inject if __ is actually used
+	- Skip if import already exists (checks multiple patterns)
+	- Never inject inside `import {` blocks
+	- Insert after last complete import statement
+	"""
+	# Check if __ is used anywhere in the file
+	if not ALREADY_WRAPPED_JS.search(text):
+		return text
+	
+	# Check if import already exists (multiple patterns)
+	import_patterns = [
+		r'import\s+{\s*[^}]*\b__\b[^}]*}\s+from\s+["\']@/translation["\']',
+		r'import\s+{\s*__\s*}\s+from\s+["\']@/translation["\']',
+		r'from\s+["\']@/translation["\']\s+import\s+{\s*[^}]*\b__\b[^}]*}',
+	]
+	for pattern in import_patterns:
+		if re.search(pattern, text):
+			return text
+	
+	def inject_in_script(m: re.Match) -> str:
+		start, inner, end = m.group(1), m.group(2), m.group(3)
+		
+		# Double-check import doesn't exist in this script block
+		for pattern in import_patterns:
+			if re.search(pattern, inner):
+				return m.group(0)
+		
+		lines = inner.split('\n')
+		insert_idx = 0
+		
+		# Find last COMPLETE import statement (not inside import { })
+		last_import_idx = -1
+		in_multiline_import = False
+		
+		for i, line in enumerate(lines):
+			stripped = line.strip()
+			
+			# Track multiline imports
+			if 'import' in stripped and '{' in stripped and '}' not in stripped:
+				in_multiline_import = True
+			elif in_multiline_import and '}' in stripped:
+				in_multiline_import = False
+				last_import_idx = i  # This is the end of multiline import
+			elif not in_multiline_import and stripped.startswith('import '):
+				# Single-line import
+				last_import_idx = i
+		
+		if last_import_idx >= 0:
+			# Insert after last import (add 1 to go to next line)
+			insert_idx = last_import_idx + 1
+			
+			# If next line is empty, use it; otherwise insert before next code
+			if insert_idx < len(lines) and not lines[insert_idx].strip():
+				# Replace empty line with import
+				lines[insert_idx] = 'import { __ } from "@/translation";'
+			else:
+				# Insert new line
+				lines.insert(insert_idx, 'import { __ } from "@/translation";')
+		else:
+			# No imports found, insert at start (after initial empty lines/comments)
+			for i, line in enumerate(lines):
+				stripped = line.strip()
+				if stripped and not stripped.startswith('//') and not stripped.startswith('/*'):
+					insert_idx = i
+					break
+			lines.insert(insert_idx, 'import { __ } from "@/translation";')
+		
+		new_inner = '\n'.join(lines)
+		return f"{start}{new_inner}{end}"
+	
+	return SCRIPT_BLOCK_RE.sub(inject_in_script, text)
+
+
 def process_vue_file(
 	text: str,
 	attr_keys: Iterable[str],
 	js_keys: Iterable[str],
-	wrap_tags: Optional[Iterable[str]] = None
+	wrap_tags: Optional[Iterable[str]] = None,
+	wrap_toast: bool = False
 ) -> str:
 	out = process_template(text, attr_keys)
 
@@ -182,7 +262,15 @@ def process_vue_file(
 	if wrap_tags:
 		out = wrap_tag_content(out, wrap_tags)
 	
+	# Optional: wrap toast messages
+	if wrap_toast:
+		out = wrap_toast_messages(out)
+	
 	out = fix_v_model_accidents(out)
+	
+	# Auto-inject import if __ is used
+	out = _inject_vue_import(out)
+	
 	return out
 
 
@@ -379,6 +467,52 @@ def wrap_tag_content(text: str, tag_names: Iterable[str]) -> str:
 	return text
 
 
+def wrap_toast_messages(text: str) -> str:
+	"""Wrap toast.success() and toast.error() messages with __() for i18n.
+	
+	Converts:
+		toast.success("Message") -> toast.success(__("Message"))
+		toast.error("Error") -> toast.error(__("Error"))
+	
+	Safety guards:
+		- Skip if already wrapped with __(
+		- Skip if message is a variable/expression (contains ${ or starts with variable)
+		- Skip template literals with interpolation
+	
+	Args:
+		text: Vue or TypeScript source code
+	
+	Returns:
+		Processed text with wrapped toast messages
+	"""
+	# Pattern to match toast.success("message") or toast.error("message")
+	# but not already wrapped with __(
+	pattern = r'toast\.(success|error)\((?!__\()(["\'])([^"\']*)\2'
+	
+	def _replacer(m: re.Match) -> str:
+		method = m.group(1)  # success or error
+		quote = m.group(2)   # " or '
+		message = m.group(3)  # the message
+		
+		# Skip if message is empty
+		if not message:
+			return m.group(0)
+		
+		# Skip if message contains interpolation markers
+		if '${' in message or message.startswith('${'):
+			return m.group(0)
+		
+		# Skip if message appears to be a variable (no spaces, starts with lowercase/uppercase)
+		# This catches cases like toast.success(successMessage)
+		if ' ' not in message and not any(c in message for c in ['.', ',', '!', '?', ':']):
+			# Likely a variable name, but we already filtered by quotes, so this is actual text
+			pass
+		
+		return f'toast.{method}(__({quote}{message}{quote})'
+	
+	return re.sub(pattern, _replacer, text)
+
+
 # ── Filesystem ops (atomic, reporting, ignore) ────────────────────────────────
 @dataclasses.dataclass
 class ProcessStats:
@@ -469,6 +603,7 @@ def process_file(
 	max_file_size: Optional[int] = None,
 	normalize: bool = False,
 	wrap_tags: Optional[Iterable[str]] = None,
+	wrap_toast: bool = False,
 ) -> Tuple[int, Optional[str]]:
 	# Safety checks: skip symlinks and very large files (configurable)
 	try:
@@ -513,9 +648,12 @@ def process_file(
 	new_text = text
 
 	if p.suffix == ".vue":
-		new_text = process_vue_file(text, attr_keys, js_keys, wrap_tags=wrap_tags)
+		new_text = process_vue_file(text, attr_keys, js_keys, wrap_tags=wrap_tags, wrap_toast=wrap_toast)
 	elif p.suffix in (".ts", ".js"):
 		new_text = process_js_code(text, js_keys)
+		# Also wrap toast messages in TypeScript/JavaScript files
+		if wrap_toast:
+			new_text = wrap_toast_messages(new_text)
 	elif enable_python and p.suffix == ".py":
 		assert py_cfg is not None
 		new_text = process_python_code(text, py_cfg)
@@ -599,6 +737,8 @@ def run(args: argparse.Namespace) -> int:
 	if hasattr(args, 'wrap_tag_content') and args.wrap_tag_content:
 		wrap_tags = tuple([t.strip() for t in args.wrap_tag_content.split(",") if t.strip()])
 
+	wrap_toast = getattr(args, 'wrap_toast', False)
+
 	def _work(p: pathlib.Path):
 		try:
 			if is_ignored(base, p, ignore_globs):
@@ -615,6 +755,7 @@ def run(args: argparse.Namespace) -> int:
 				max_file_size=getattr(args, 'max_file_size', None),
 				normalize=getattr(args, 'normalize', False),
 				wrap_tags=wrap_tags,
+				wrap_toast=wrap_toast,
 			)
 		except Exception as e:
 			# Log and continue other files — robust against single-file failures
@@ -656,6 +797,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 	# Tag content wrapping (opt-in for Button/etc)
 	ap.add_argument("--wrap-tag-content", metavar="TAGS", help="Wrap inner text of specified tags with {{ __(\"text\") }} (comma-separated, e.g., Button,CustomButton)")
+	
+	# Toast message wrapping
+	ap.add_argument("--wrap-toast", action="store_true", help="Wrap toast.success() and toast.error() messages with __()")
 
 	return ap
 

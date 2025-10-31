@@ -283,32 +283,32 @@ FLOAT_FIELDS = {
     "problem_confidence",
 }
 SELECT_FIELDS: Dict[str, set[str]] = {
-    "last_sentiment": {"Olumlu", "Positive", "Nötr", "Neutral", "Olumsuz", "Negative"},
-    "effort_band": {"Düşük", "Low", "Orta", "Medium", "Yüksek", "High"},
+    "last_sentiment": {"Olumlu", "Nötr", "Olumsuz"},
+    "effort_band": {"Düşük", "Orta", "Yüksek"},
 }
 
 # --- Normalization helpers for SELECT fields --------------------------------
 
 _SELECT_SYNONYMS: Dict[str, Dict[str, str]] = {
-    # key: fieldname, value: map of lowercase input -> canonical value
+    # key: fieldname, value: map of lowercase input -> canonical Turkish value
     "last_sentiment": {
-        # English (canonical values from JSON)
-        "pos": "Positive", "positive": "Positive", "+": "Positive",
-        "neu": "Neutral", "neutral": "Neutral", "0": "Neutral",
-        "neg": "Negative", "negative": "Negative", "-": "Negative",
-        # Turkish (canonical values from JSON)
+        # English inputs → Turkish canonical values
+        "pos": "Olumlu", "positive": "Olumlu", "+": "Olumlu",
+        "neu": "Nötr", "neutral": "Nötr", "0": "Nötr",
+        "neg": "Olumsuz", "negative": "Olumsuz", "-": "Olumsuz",
+        # Turkish inputs (with variants)
         "pozitif": "Olumlu", "olumlu": "Olumlu",
         "nötr": "Nötr", "notr": "Nötr", "tarafsız": "Nötr", "tarafsiz": "Nötr",
         "negatif": "Olumsuz", "olumsuz": "Olumsuz",
         # Legacy typo mapping
-        "nautral": "Neutral",
+        "nautral": "Nötr",
     },
     "effort_band": {
-        # English (canonical values from JSON)
-        "l": "Low", "low": "Low", "lo": "Low",
-        "m": "Medium", "med": "Medium", "medium": "Medium",
-        "h": "High", "hi": "High", "high": "High",
-        # Turkish (canonical values from JSON)
+        # English inputs → Turkish canonical values
+        "l": "Düşük", "low": "Düşük", "lo": "Düşük",
+        "m": "Orta", "med": "Orta", "medium": "Orta",
+        "h": "Yüksek", "hi": "Yüksek", "high": "Yüksek",
+        # Turkish inputs (with variants)
         "düşük": "Düşük", "dusuk": "Düşük", "az": "Düşük",
         "orta": "Orta",
         "yüksek": "Yüksek", "yuksek": "Yüksek", "çok": "Yüksek", "cok": "Yüksek",

@@ -148,61 +148,68 @@ class TestIngestHelperFunctions(unittest.TestCase):
         self.assertEqual(_append_text("", "", False), "")
     
     def test_normalize_select_english(self):
-        """Test SELECT field normalization - English."""
-        # last_sentiment (note: DB has typo "Nautral")
-        self.assertEqual(_normalize_select("last_sentiment", "Positive"), "Positive")
-        self.assertEqual(_normalize_select("last_sentiment", "pos"), "Positive")
-        self.assertEqual(_normalize_select("last_sentiment", "positive"), "Positive")
-        self.assertEqual(_normalize_select("last_sentiment", "+"), "Positive")
+        """Test SELECT field normalization - English inputs normalize to Turkish."""
+        # last_sentiment: English → Turkish
+        self.assertEqual(_normalize_select("last_sentiment", "Positive"), "Olumlu")
+        self.assertEqual(_normalize_select("last_sentiment", "pos"), "Olumlu")
+        self.assertEqual(_normalize_select("last_sentiment", "positive"), "Olumlu")
+        self.assertEqual(_normalize_select("last_sentiment", "+"), "Olumlu")
         
-        self.assertEqual(_normalize_select("last_sentiment", "Nautral"), "Nautral")
-        self.assertEqual(_normalize_select("last_sentiment", "neu"), "Nautral")
-        self.assertEqual(_normalize_select("last_sentiment", "neutral"), "Nautral")
-        self.assertEqual(_normalize_select("last_sentiment", "0"), "Nautral")
+        self.assertEqual(_normalize_select("last_sentiment", "Neutral"), "Nötr")
+        self.assertEqual(_normalize_select("last_sentiment", "neu"), "Nötr")
+        self.assertEqual(_normalize_select("last_sentiment", "neutral"), "Nötr")
+        self.assertEqual(_normalize_select("last_sentiment", "0"), "Nötr")
+        self.assertEqual(_normalize_select("last_sentiment", "Nautral"), "Nötr")  # Legacy typo
         
-        self.assertEqual(_normalize_select("last_sentiment", "Negative"), "Negative")
-        self.assertEqual(_normalize_select("last_sentiment", "neg"), "Negative")
-        self.assertEqual(_normalize_select("last_sentiment", "-"), "Negative")
+        self.assertEqual(_normalize_select("last_sentiment", "Negative"), "Olumsuz")
+        self.assertEqual(_normalize_select("last_sentiment", "neg"), "Olumsuz")
+        self.assertEqual(_normalize_select("last_sentiment", "-"), "Olumsuz")
         
-        # effort_band
-        self.assertEqual(_normalize_select("effort_band", "Low"), "Low")
-        self.assertEqual(_normalize_select("effort_band", "l"), "Low")
-        self.assertEqual(_normalize_select("effort_band", "low"), "Low")
+        # effort_band: English → Turkish
+        self.assertEqual(_normalize_select("effort_band", "Low"), "Düşük")
+        self.assertEqual(_normalize_select("effort_band", "l"), "Düşük")
+        self.assertEqual(_normalize_select("effort_band", "low"), "Düşük")
         
-        self.assertEqual(_normalize_select("effort_band", "Medium"), "Medium")
-        self.assertEqual(_normalize_select("effort_band", "m"), "Medium")
-        self.assertEqual(_normalize_select("effort_band", "med"), "Medium")
+        self.assertEqual(_normalize_select("effort_band", "Medium"), "Orta")
+        self.assertEqual(_normalize_select("effort_band", "m"), "Orta")
+        self.assertEqual(_normalize_select("effort_band", "med"), "Orta")
         
-        self.assertEqual(_normalize_select("effort_band", "High"), "High")
-        self.assertEqual(_normalize_select("effort_band", "h"), "High")
-        self.assertEqual(_normalize_select("effort_band", "hi"), "High")
+        self.assertEqual(_normalize_select("effort_band", "High"), "Yüksek")
+        self.assertEqual(_normalize_select("effort_band", "h"), "Yüksek")
+        self.assertEqual(_normalize_select("effort_band", "hi"), "Yüksek")
     
     def test_normalize_select_turkish(self):
-        """Test SELECT field normalization - Turkish support."""
-        # last_sentiment - Turkish (maps to "Nautral" due to DB typo)
-        self.assertEqual(_normalize_select("last_sentiment", "pozitif"), "Positive")
-        self.assertEqual(_normalize_select("last_sentiment", "olumlu"), "Positive")
-        self.assertEqual(_normalize_select("last_sentiment", "Pozitif"), "Positive")
+        """Test SELECT field normalization - Turkish inputs remain Turkish."""
+        # last_sentiment - Turkish inputs stay as canonical Turkish
+        self.assertEqual(_normalize_select("last_sentiment", "pozitif"), "Olumlu")
+        self.assertEqual(_normalize_select("last_sentiment", "olumlu"), "Olumlu")
+        self.assertEqual(_normalize_select("last_sentiment", "Pozitif"), "Olumlu")
+        self.assertEqual(_normalize_select("last_sentiment", "Olumlu"), "Olumlu")  # Already canonical
         
-        self.assertEqual(_normalize_select("last_sentiment", "nötr"), "Nautral")
-        self.assertEqual(_normalize_select("last_sentiment", "notr"), "Nautral")
-        self.assertEqual(_normalize_select("last_sentiment", "tarafsız"), "Nautral")
-        self.assertEqual(_normalize_select("last_sentiment", "tarafsiz"), "Nautral")
+        self.assertEqual(_normalize_select("last_sentiment", "nötr"), "Nötr")
+        self.assertEqual(_normalize_select("last_sentiment", "notr"), "Nötr")
+        self.assertEqual(_normalize_select("last_sentiment", "tarafsız"), "Nötr")
+        self.assertEqual(_normalize_select("last_sentiment", "tarafsiz"), "Nötr")
+        self.assertEqual(_normalize_select("last_sentiment", "Nötr"), "Nötr")  # Already canonical
         
-        self.assertEqual(_normalize_select("last_sentiment", "negatif"), "Negative")
-        self.assertEqual(_normalize_select("last_sentiment", "olumsuz"), "Negative")
+        self.assertEqual(_normalize_select("last_sentiment", "negatif"), "Olumsuz")
+        self.assertEqual(_normalize_select("last_sentiment", "olumsuz"), "Olumsuz")
+        self.assertEqual(_normalize_select("last_sentiment", "Olumsuz"), "Olumsuz")  # Already canonical
         
-        # effort_band - Turkish
-        self.assertEqual(_normalize_select("effort_band", "düşük"), "Low")
-        self.assertEqual(_normalize_select("effort_band", "dusuk"), "Low")
-        self.assertEqual(_normalize_select("effort_band", "az"), "Low")
+        # effort_band - Turkish inputs stay as canonical Turkish
+        self.assertEqual(_normalize_select("effort_band", "düşük"), "Düşük")
+        self.assertEqual(_normalize_select("effort_band", "dusuk"), "Düşük")
+        self.assertEqual(_normalize_select("effort_band", "az"), "Düşük")
+        self.assertEqual(_normalize_select("effort_band", "Düşük"), "Düşük")  # Already canonical
         
-        self.assertEqual(_normalize_select("effort_band", "orta"), "Medium")
+        self.assertEqual(_normalize_select("effort_band", "orta"), "Orta")
+        self.assertEqual(_normalize_select("effort_band", "Orta"), "Orta")  # Already canonical
         
-        self.assertEqual(_normalize_select("effort_band", "yüksek"), "High")
-        self.assertEqual(_normalize_select("effort_band", "yuksek"), "High")
-        self.assertEqual(_normalize_select("effort_band", "çok"), "High")
-        self.assertEqual(_normalize_select("effort_band", "cok"), "High")
+        self.assertEqual(_normalize_select("effort_band", "yüksek"), "Yüksek")
+        self.assertEqual(_normalize_select("effort_band", "yuksek"), "Yüksek")
+        self.assertEqual(_normalize_select("effort_band", "çok"), "Yüksek")
+        self.assertEqual(_normalize_select("effort_band", "cok"), "Yüksek")
+        self.assertEqual(_normalize_select("effort_band", "Yüksek"), "Yüksek")  # Already canonical
 
 
 class TestIngestGetEndpoints(unittest.TestCase):
@@ -394,66 +401,66 @@ class TestIngestTicketUpdateEndpoints(unittest.TestCase):
         self.assertEqual(doc.ai_reply_suggestion, "Suggested reply text")
     
     def test_set_sentiment_english(self):
-        """Test set_sentiment endpoint with English values."""
+        """Test set_sentiment endpoint with English values - normalizes to Turkish."""
         if not (self.has_last_sentiment and self.has_sentiment_trend and 
                 self.has_effort_score and self.has_effort_band):
             self.skipTest("Sentiment fields not available")
         
         result = set_sentiment(
             ticket=self.ticket.name,
-            last_sentiment="Positive",
+            last_sentiment="Positive",  # English input
             sentiment_trend="Improving",
             effort_score=2.5,
-            effort_band="Low"
+            effort_band="Low"  # English input
         )
         self.assertTrue(result.get("ok"))
         
-        # Verify
+        # Verify: English values normalized to Turkish
         doc = frappe.get_doc("HD Ticket", self.ticket.name)
-        self.assertEqual(doc.last_sentiment, "Positive")
+        self.assertEqual(doc.last_sentiment, "Olumlu")  # Normalized to Turkish
         self.assertEqual(doc.sentiment_trend, "Improving")
         self.assertEqual(doc.effort_score, 2.5)
-        self.assertEqual(doc.effort_band, "Low")
+        self.assertEqual(doc.effort_band, "Düşük")  # Normalized to Turkish
     
     def test_set_sentiment_turkish(self):
-        """Test set_sentiment endpoint with Turkish values."""
+        """Test set_sentiment endpoint with Turkish values - stays Turkish."""
         if not (self.has_last_sentiment and self.has_sentiment_trend and 
                 self.has_effort_score and self.has_effort_band):
             self.skipTest("Sentiment fields not available")
         
         result = set_sentiment(
             ticket=self.ticket.name,
-            last_sentiment="pozitif",  # Turkish
-            sentiment_trend="Stable",  # Use valid DB value
+            last_sentiment="pozitif",  # Turkish variant
+            sentiment_trend="Stable",
             effort_score=3.0,
-            effort_band="düşük"  # Turkish
+            effort_band="düşük"  # Turkish variant
         )
         self.assertTrue(result.get("ok"))
         
-        # Verify normalized
+        # Verify: Turkish variants normalized to canonical Turkish
         doc = frappe.get_doc("HD Ticket", self.ticket.name)
-        self.assertEqual(doc.last_sentiment, "Positive")
-        self.assertEqual(doc.effort_band, "Low")
+        self.assertEqual(doc.last_sentiment, "Olumlu")  # Canonical Turkish
+        self.assertEqual(doc.effort_band, "Düşük")  # Canonical Turkish
     
     def test_set_sentiment_synonyms(self):
-        """Test set_sentiment with various synonyms."""
+        """Test set_sentiment with various synonyms - all normalize to Turkish."""
         if not self.has_last_sentiment:
             self.skipTest("last_sentiment field not available")
         
-        # Test positive synonyms
+        # Test positive synonyms → Olumlu
         set_sentiment(self.ticket.name, last_sentiment="pos")
         doc = frappe.get_doc("HD Ticket", self.ticket.name)
-        self.assertEqual(doc.last_sentiment, "Positive")
+        self.assertEqual(doc.last_sentiment, "Olumlu")
         
-        # Test neutral synonyms (maps to "Nautral" in DB)
+        # Test neutral synonyms → Nötr
         set_sentiment(self.ticket.name, last_sentiment="neu")
         doc.reload()
-        self.assertEqual(doc.last_sentiment, "Nautral")
+        self.assertEqual(doc.last_sentiment, "Nötr")
         
-        # Test negative synonyms
+        # Test negative synonyms → Olumsuz
         set_sentiment(self.ticket.name, last_sentiment="neg")
         doc.reload()
-        self.assertEqual(doc.last_sentiment, "Negative")
+        self.assertEqual(doc.last_sentiment, "Olumsuz")
     
     def test_set_metrics(self):
         """Test set_metrics endpoint."""
@@ -479,7 +486,7 @@ class TestIngestTicketUpdateEndpoints(unittest.TestCase):
         
         fields = {
             "ai_summary": "General summary",
-            "last_sentiment": "Nautral",  # Use actual DB value
+            "last_sentiment": "Neutral",  # English input
             "effort_score": 3.5
         }
         result = update_ticket(
@@ -491,10 +498,10 @@ class TestIngestTicketUpdateEndpoints(unittest.TestCase):
         self.assertTrue(result.get("ok"))
         self.assertIn("changed", result)
         
-        # Verify
+        # Verify: English normalized to Turkish
         doc = frappe.get_doc("HD Ticket", self.ticket.name)
         self.assertEqual(doc.ai_summary, "General summary")
-        self.assertEqual(doc.last_sentiment, "Nautral")
+        self.assertEqual(doc.last_sentiment, "Nötr")  # Normalized to Turkish
         self.assertEqual(doc.effort_score, 3.5)
     
     def test_update_ticket_with_json_string(self):
@@ -504,7 +511,7 @@ class TestIngestTicketUpdateEndpoints(unittest.TestCase):
         
         fields_json = json.dumps({
             "ai_summary": "JSON summary",
-            "effort_band": "High"
+            "effort_band": "High"  # English input
         })
         result = update_ticket(
             ticket=self.ticket.name,
@@ -514,10 +521,10 @@ class TestIngestTicketUpdateEndpoints(unittest.TestCase):
         )
         self.assertTrue(result.get("ok"))
         
-        # Verify
+        # Verify: English normalized to Turkish
         doc = frappe.get_doc("HD Ticket", self.ticket.name)
         self.assertEqual(doc.ai_summary, "JSON summary")
-        self.assertEqual(doc.effort_band, "High")
+        self.assertEqual(doc.effort_band, "Yüksek")  # Normalized to Turkish
     
     def test_update_ticket_invalid_field(self):
         """Test that invalid fields are ignored."""
@@ -902,7 +909,7 @@ class TestIngestEdgeCases(unittest.TestCase):
         if not (self.has_last_sentiment and self.has_effort_band):
             self.skipTest("Sentiment fields not available")
         
-        # Set initial values
+        # Set initial values (English → Turkish)
         set_sentiment(
             ticket=self.ticket.name,
             last_sentiment="Positive",
@@ -916,10 +923,10 @@ class TestIngestEdgeCases(unittest.TestCase):
         )
         self.assertTrue(result.get("ok"))
         
-        # Verify effort_band unchanged
+        # Verify: last_sentiment changed to Turkish, effort_band unchanged
         doc = frappe.get_doc("HD Ticket", self.ticket.name)
-        self.assertEqual(doc.last_sentiment, "Negative")
-        self.assertEqual(doc.effort_band, "Low")
+        self.assertEqual(doc.last_sentiment, "Olumsuz")  # Normalized to Turkish
+        self.assertEqual(doc.effort_band, "Düşük")  # Remains Turkish from initial set
     
     def test_html_cleaning_in_update(self):
         """Test that HTML is properly cleaned when clean_html=1."""

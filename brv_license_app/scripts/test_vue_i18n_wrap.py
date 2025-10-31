@@ -28,6 +28,7 @@ from vue_i18n_wrap import (
     _py_string_is_simple,
     process_all_tags,
     atomic_write,
+    wrap_toast_messages,
 )
 
 
@@ -605,6 +606,225 @@ Line 2">Content</div>'''
         result = process_template(f"<template>{html}</template>", ["label"])
         self.assertIn("__", result)
         self.assertIn(long_text, result)
+
+
+class TestToastMessageWrapping(unittest.TestCase):
+    """Test wrapping toast.success() and toast.error() messages."""
+    
+    def test_simple_toast_success(self):
+        """Test wrapping simple toast.success() message."""
+        from vue_i18n_wrap import wrap_toast_messages
+        code = 'toast.success("Contact created");'
+        result = wrap_toast_messages(code)
+        self.assertIn('toast.success(__("Contact created"))', result)
+    
+    def test_simple_toast_error(self):
+        """Test wrapping simple toast.error() message."""
+        from vue_i18n_wrap import wrap_toast_messages
+        code = 'toast.error("Email should not be empty");'
+        result = wrap_toast_messages(code)
+        self.assertIn('toast.error(__("Email should not be empty"))', result)
+    
+    def test_toast_with_single_quotes(self):
+        """Test wrapping toast message with single quotes."""
+        from vue_i18n_wrap import wrap_toast_messages
+        code = "toast.success('Team created');"
+        result = wrap_toast_messages(code)
+        self.assertIn("toast.success(__('Team created'))", result)
+    
+    def test_already_wrapped_toast_skipped(self):
+        """Test that already wrapped toast is not double-wrapped."""
+        from vue_i18n_wrap import wrap_toast_messages
+        code = 'toast.success(__("Already wrapped"));'
+        result = wrap_toast_messages(code)
+        self.assertEqual(result.count("__("), 1)
+    
+    def test_toast_with_variable_skipped(self):
+        """Test that toast with variables is skipped."""
+        from vue_i18n_wrap import wrap_toast_messages
+        code = 'toast.error(err.messages[0]);'
+        result = wrap_toast_messages(code)
+        # Should not wrap non-string literals
+        self.assertNotIn('__("err.messages', result)
+    
+    def test_toast_with_interpolation_skipped(self):
+        """Test that template literals with interpolation are skipped."""
+        from vue_i18n_wrap import wrap_toast_messages
+        code = 'toast.success(`Role updated to ${newRole}`);'
+        result = wrap_toast_messages(code)
+        # Should not wrap template literals (our pattern only matches quotes)
+        self.assertNotIn('__(`Role', result)
+    
+    def test_multiple_toast_messages(self):
+        """Test wrapping multiple toast messages in same file."""
+        from vue_i18n_wrap import wrap_toast_messages
+        code = '''
+function save() {
+    toast.success("Item saved");
+}
+function deleteItem() {
+    toast.error("Cannot delete");
+}
+'''
+        result = wrap_toast_messages(code)
+        self.assertIn('toast.success(__("Item saved"))', result)
+        self.assertIn('toast.error(__("Cannot delete"))', result)
+    
+    def test_toast_in_vue_file(self):
+        """Test toast wrapping in complete Vue file."""
+        vue = '''<template><div></div></template>
+<script setup>
+import { toast } from "frappe-ui";
+
+function save() {
+    toast.success("Data saved");
+}
+</script>'''
+        result = process_vue_file(vue, [], [], wrap_toast=True)
+        self.assertIn('toast.success(__("Data saved"))', result)
+    
+    def test_toast_with_special_characters(self):
+        """Test toast message with special characters."""
+        from vue_i18n_wrap import wrap_toast_messages
+        code = 'toast.success("Contact with email already exists");'
+        result = wrap_toast_messages(code)
+        self.assertIn('__("Contact with email already exists")', result)
+    
+    def test_empty_toast_message_skipped(self):
+        """Test that empty toast messages are skipped."""
+        from vue_i18n_wrap import wrap_toast_messages
+        code = 'toast.success("");'
+        result = wrap_toast_messages(code)
+        # Should not wrap empty strings
+        self.assertEqual(result, code)
+
+
+class TestVueImportInjection(unittest.TestCase):
+    """Test automatic import injection for Vue files."""
+    
+    def test_inject_import_when_needed(self):
+        """Test that import is injected when __ is used but import is missing."""
+        from vue_i18n_wrap import _inject_vue_import
+        vue = '''<template>
+  <div :label="__('Text')"></div>
+</template>
+<script setup lang="ts">
+import { ref } from "vue";
+const data = ref(null);
+</script>'''
+        result = _inject_vue_import(vue)
+        self.assertIn('import { __ } from "@/translation";', result)
+        # Should be after existing imports
+        import_idx = result.index('import { __ } from "@/translation"')
+        vue_import_idx = result.index('import { ref }')
+        self.assertGreater(import_idx, vue_import_idx)
+    
+    def test_skip_inject_when_import_exists(self):
+        """Test that import is not injected if already present."""
+        from vue_i18n_wrap import _inject_vue_import
+        vue = '''<template>
+  <div :label="__('Text')"></div>
+</template>
+<script setup lang="ts">
+import { ref } from "vue";
+import { __ } from "@/translation";
+const data = ref(null);
+</script>'''
+        result = _inject_vue_import(vue)
+        # Should only have one import
+        self.assertEqual(result.count('import { __ } from "@/translation"'), 1)
+    
+    def test_skip_inject_when_no_usage(self):
+        """Test that import is not injected if __ is not used."""
+        from vue_i18n_wrap import _inject_vue_import
+        vue = '''<template>
+  <div label="Static Text"></div>
+</template>
+<script setup lang="ts">
+import { ref } from "vue";
+</script>'''
+        result = _inject_vue_import(vue)
+        # Should not inject
+        self.assertNotIn('import { __ } from "@/translation"', result)
+    
+    def test_inject_with_multiline_import(self):
+        """Test injection with multiline import statements."""
+        from vue_i18n_wrap import _inject_vue_import
+        vue = '''<template>
+  <div :label="__('Text')"></div>
+</template>
+<script setup lang="ts">
+import {
+  Button,
+  Dialog
+} from "frappe-ui";
+const data = ref(null);
+</script>'''
+        result = _inject_vue_import(vue)
+        self.assertIn('import { __ } from "@/translation";', result)
+        # Should be after the multiline import
+        import_idx = result.index('import { __ } from "@/translation"')
+        dialog_idx = result.index('} from "frappe-ui"')
+        self.assertGreater(import_idx, dialog_idx)
+    
+    def test_inject_when_no_imports(self):
+        """Test injection when no other imports exist."""
+        from vue_i18n_wrap import _inject_vue_import
+        vue = '''<template>
+  <div :label="__('Text')"></div>
+</template>
+<script setup lang="ts">
+const data = { value: 1 };
+</script>'''
+        result = _inject_vue_import(vue)
+        self.assertIn('import { __ } from "@/translation";', result)
+    
+    def test_no_duplicate_import_in_broken_case(self):
+        """Test that we don't create duplicate imports even in edge cases."""
+        from vue_i18n_wrap import _inject_vue_import
+        # Simulate a broken case where import exists but in wrong place
+        vue = '''<template>
+  <div :label="__('Text')"></div>
+</template>
+<script setup lang="ts">
+import { ref } from "vue";
+import { __ } from "@/translation";
+// Some code
+</script>'''
+        result = _inject_vue_import(vue)
+        # Should not add another import
+        self.assertEqual(result.count('import { __ } from "@/translation"'), 1)
+    
+    def test_inject_preserves_formatting(self):
+        """Test that injection preserves original formatting."""
+        from vue_i18n_wrap import _inject_vue_import
+        vue = '''<template>
+  <div :label="__('Text')"></div>
+</template>
+
+<script setup lang="ts">
+import { ref } from "vue";
+
+const data = ref(null);
+</script>'''
+        result = _inject_vue_import(vue)
+        self.assertIn('import { __ } from "@/translation";', result)
+        # Import is inserted after last import with single newline
+        self.assertIn('import { ref } from "vue";\nimport { __ } from "@/translation";', result)
+        # Original code structure preserved
+        self.assertIn('const data = ref(null);', result)
+    
+    def test_process_vue_file_adds_import(self):
+        """Test that process_vue_file automatically adds import."""
+        vue = '''<template>
+  <button :label="__('Click')">Test</button>
+</template>
+<script setup lang="ts">
+import { ref } from "vue";
+</script>'''
+        # Process without any wrapping (just test import injection)
+        result = process_vue_file(vue, [], [])
+        self.assertIn('import { __ } from "@/translation";', result)
 
 
 class TestRealWorldScenarios(unittest.TestCase):
